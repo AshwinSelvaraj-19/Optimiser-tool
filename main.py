@@ -2403,14 +2403,109 @@ def main():
         run_ab_benchmark_cli(profile_id=profile_id, duration=duration, runs=runs)
         return 0
 
+    if "--telemetry-status" in sys.argv:
+        from app.performance.realtime_telemetry import realtime_telemetry
+        import time as _time
+
+        # Quick 3-second capture for status
+        print("=" * 50)
+        print("HEAVEN SOCIETY — TELEMETRY STATUS")
+        print("=" * 50)
+        print()
+
+        # Detect target
+        from app.emulator.detector import emulator_detector
+        emus = emulator_detector.detect_all()
+        target_pid = 0
+        target_name = ""
+        if emus:
+            emu = emus[0]
+            target_pid = getattr(emu, 'pid', 0) or 0
+            target_name = getattr(emu, 'process_name', '') or getattr(emu, 'name', 'Emulator')
+
+        if target_pid > 0:
+            print(f"TARGET")
+            print(f"  {target_name}  PID: {target_pid}")
+        else:
+            print("TARGET")
+            print("  No emulator detected")
+        print()
+
+        # Quick capture
+        session = realtime_telemetry.start_session(target_name, target_pid)
+        _time.sleep(3)
+        realtime_telemetry.stop_session()
+
+        status = realtime_telemetry.get_status_dict()
+        latest = status.get("latest", {})
+        summary_data = status.get("summary", {})
+        bottleneck_data = status.get("bottleneck", {})
+
+        print("PERFORMANCE")
+        if latest.get("fps") is not None:
+            print(f"  FPS:           {latest['fps']:.1f}")
+        else:
+            print("  FPS:           N/A")
+        if latest.get("one_percent_low") is not None:
+            print(f"  1% Low:        {latest['one_percent_low']:.1f}")
+        else:
+            print("  1% Low:        N/A")
+        if latest.get("frame_time_ms") is not None:
+            print(f"  Frame Time:    {latest['frame_time_ms']:.2f} ms")
+        else:
+            print("  Frame Time:    N/A")
+        print()
+
+        print("SYSTEM")
+        if latest.get("cpu_percent") is not None:
+            print(f"  CPU:           {latest['cpu_percent']:.1f}%")
+        else:
+            print("  CPU:           N/A")
+        if latest.get("gpu_percent") is not None:
+            print(f"  GPU:           {latest['gpu_percent']:.1f}%")
+        else:
+            print("  GPU:           N/A")
+        if latest.get("ram_used_mb") is not None:
+            used_gb = latest['ram_used_mb'] / 1024
+            total_gb = (latest.get('ram_total_mb') or 0) / 1024
+            print(f"  RAM:           {used_gb:.1f}/{total_gb:.1f} GB")
+        else:
+            print("  RAM:           N/A")
+        print()
+
+        print("THERMALS")
+        if latest.get("gpu_temp_c") is not None:
+            print(f"  GPU:           {latest['gpu_temp_c']:.0f}\u00b0C")
+        else:
+            print("  GPU:           N/A")
+        if latest.get("cpu_temperature_c") is not None:
+            print(f"  CPU:           {latest['cpu_temperature_c']:.0f}\u00b0C")
+        else:
+            print("  CPU:           N/A")
+        print()
+
+        bn_type = bottleneck_data.get("bottleneck", "INSUFFICIENT_DATA")
+        bn_conf = bottleneck_data.get("confidence", 0)
+        pacing = status.get("frame_pacing", "INSUFFICIENT_DATA")
+        print(f"BOTTLENECK:     {bn_type}")
+        print(f"CONFIDENCE:     {bn_conf}%")
+        print(f"FRAME PACING:   {pacing}")
+        print()
+
+        overhead = status.get("overhead", {})
+        print(f"SAMPLES:        {status.get('sample_count', 0)}")
+        print(f"OVERHEAD:       {overhead.get('avg_collection_time_ms', 0):.1f}ms avg")
+        print()
+        print("=" * 50)
+        return 0
+
     if "--telemetry" in sys.argv:
-        from app.performance.telemetry_collector import TelemetryCollector
-        from app.performance.bottleneck_analyzer import BottleneckAnalyzer
+        from app.performance.realtime_telemetry import RealtimeTelemetry
         from app.performance.presentmon_provider import PresentMonProvider
         import time as _time
 
         duration = 30
-        interval = 500
+        interval_ms = 500
         for i, arg in enumerate(sys.argv):
             if arg == "--duration" and i + 1 < len(sys.argv):
                 try:
@@ -2419,14 +2514,14 @@ def main():
                     pass
             if arg == "--interval" and i + 1 < len(sys.argv):
                 try:
-                    interval = int(float(sys.argv[i + 1]) * 1000)
+                    interval_ms = int(float(sys.argv[i + 1]) * 1000)
                 except ValueError:
                     pass
 
         print("=" * 50)
         print("HEAVEN SOCIETY — REAL-TIME TELEMETRY")
         print("=" * 50)
-        print(f"Duration: {duration}s  |  Interval: {interval}ms")
+        print(f"Duration: {duration}s  |  Interval: {interval_ms}ms")
         print()
 
         # Detect target
@@ -2439,17 +2534,17 @@ def main():
             if hasattr(emu, 'pid') and emu.pid:
                 target_pid = emu.pid
                 target_name = getattr(emu, 'process_name', '') or getattr(emu, 'name', 'Emulator')
-                print(f"Target: {target_name} PID: {target_pid}")
+                print(f"TARGET")
+                print(f"  {target_name}  PID: {target_pid}")
             else:
                 print(f"Emulator detected but PID unavailable")
         else:
-            print("No emulator detected")
+            print("TARGET")
+            print("  No emulator detected")
         print()
 
-        # Start collector
-        collector = TelemetryCollector(interval_ms=interval, max_samples=duration * 1000 // interval + 10)
-        if target_pid > 0:
-            collector.set_target(target_pid, target_name)
+        # Create engine
+        engine = RealtimeTelemetry(interval_ms=interval_ms, max_samples=duration * 1000 // interval_ms + 10)
 
         # Try PresentMon
         pm = PresentMonProvider()
@@ -2459,76 +2554,101 @@ def main():
             print(f"Starting PresentMon for {target_name}...")
             pm_started = pm.start(target_process=target_name, duration=duration + 5)
             if pm_started:
-                collector.set_fps_provider(pm)
+                engine.set_fps_provider(pm)
             else:
                 print(f"PresentMon start failed: {pm.get_error_reason()}")
         else:
             print(f"PresentMon: {pm_reason}")
+        print()
 
-        collector.start()
-        print(f"\nCollecting telemetry for {duration}s...\n")
+        # Start session
+        session = engine.start_session(target_name, target_pid)
 
+        # Progress dots
+        print(f"Collecting telemetry for {duration}s ", end="", flush=True)
         try:
-            _time.sleep(duration)
+            for _ in range(duration):
+                _time.sleep(1)
+                print(".", end="", flush=True)
         except KeyboardInterrupt:
             print("\nInterrupted.")
         finally:
-            collector.stop()
+            engine.stop_session()
             if pm.is_running():
                 pm.stop()
+        print()
 
-        summary = collector.calculate_summary()
+        # Results
+        status = engine.get_status_dict()
+        latest = status.get("latest", {})
+        summary_data = status.get("summary", {})
+        bottleneck_data = status.get("bottleneck", {})
+        pacing = status.get("frame_pacing", "INSUFFICIENT_DATA")
 
+        print()
         print("TELEMETRY RESULTS")
         print("-" * 50)
-        print(f"Samples: {summary.sample_count}")
-        print(f"Duration: {summary.duration_seconds:.1f}s")
+        print(f"Samples: {session.sample_count if session else status.get('sample_count', 0)}")
+        print(f"Duration: {session.get_duration():.1f}s" if session else "")
+        print(f"Frame Pacing: {pacing}")
         print()
 
-        if summary.avg_fps is not None:
-            print(f"FPS  Avg: {summary.avg_fps:.1f}  Med: {summary.median_fps:.1f}  Low: {summary.one_percent_low:.1f}")
+        print("PERFORMANCE")
+        if latest.get("fps") is not None:
+            print(f"  FPS:           {latest['fps']:.1f}")
         else:
-            print("FPS: NOT_AVAILABLE (PresentMon capture needed)")
-
-        if summary.avg_frame_time_ms is not None:
-            print(f"Frame Time  Avg: {summary.avg_frame_time_ms:.1f}ms  Spikes: {summary.frame_spikes}")
-
-        if summary.avg_cpu_percent is not None:
-            print(f"CPU  Avg: {summary.avg_cpu_percent:.1f}%  Peak: {summary.peak_cpu_percent:.1f}%")
-
-        if summary.avg_gpu_percent is not None:
-            print(f"GPU  Avg: {summary.avg_gpu_percent:.1f}%  Peak: {summary.peak_gpu_percent:.1f}%")
-        elif summary.gpu_vram_total:
-            print(f"GPU  VRAM: {summary.gpu_vram_used_avg:.0f}/{summary.gpu_vram_total:.0f} MB")
-
-        if summary.avg_ram_used_mb is not None:
-            used_gb = summary.avg_ram_used_mb / 1024
-            total_gb = (summary.ram_total_mb or 0) / 1024
-            avail_gb = (summary.avg_ram_available_mb or 0) / 1024
-            print(f"RAM  Used: {used_gb:.1f}/{total_gb:.1f} GB  Avail: {avail_gb:.1f} GB")
-
-        if summary.avg_emulator_cpu is not None:
-            print(f"Emulator  CPU: {summary.avg_emulator_cpu:.1f}%  RAM: {summary.avg_emulator_ram_mb:.0f} MB")
-
-        print(f"Stability: {summary.stability_rating} ({summary.stability_score:.0f}/100)")
-
-        # Bottleneck analysis
-        analyzer = BottleneckAnalyzer()
-        samples = collector.samples
-        assessment = analyzer.analyze_samples(samples)
-
+            print("  FPS:           NOT_AVAILABLE")
+        if summary_data.get("median_fps") is not None:
+            print(f"  Median FPS:    {summary_data['median_fps']:.1f}")
+        if summary_data.get("one_percent_low") is not None:
+            print(f"  1% Low:        {summary_data['one_percent_low']:.1f}")
+        if summary_data.get("point_one_percent_low") is not None:
+            print(f"  0.1% Low:      {summary_data['point_one_percent_low']:.1f}")
+        if summary_data.get("avg_frame_time_ms") is not None:
+            print(f"  Frame Time:    {summary_data['avg_frame_time_ms']:.2f} ms")
+        if summary_data.get("frame_spikes") is not None:
+            print(f"  Frame Spikes:  {summary_data['frame_spikes']}")
+        if summary_data.get("stability_rating") is not None:
+            print(f"  Stability:     {summary_data['stability_rating']} ({summary_data.get('stability_score', 0):.0f}/100)")
         print()
-        print("BOTTLENECK ANALYSIS")
-        print("-" * 50)
-        print(f"Result: {assessment.bottleneck.value}")
-        print(f"Confidence: {assessment.confidence}%")
-        if assessment.evidence:
-            for ev in assessment.evidence:
-                print(f"  Evidence: {ev}")
-        if assessment.recommendations:
-            for rec in assessment.recommendations:
-                print(f"  Recommendation: {rec}")
 
+        print("SYSTEM")
+        if summary_data.get("avg_cpu_percent") is not None:
+            print(f"  CPU Avg:       {summary_data['avg_cpu_percent']:.1f}%  Peak: {summary_data.get('peak_cpu_percent', 0):.1f}%")
+        if summary_data.get("avg_gpu_percent") is not None:
+            print(f"  GPU Avg:       {summary_data['avg_gpu_percent']:.1f}%  Peak: {summary_data.get('peak_gpu_percent', 0):.1f}%")
+        elif summary_data.get("gpu_vram_total"):
+            print(f"  GPU VRAM:      {summary_data.get('gpu_vram_used_avg', 0):.0f}/{summary_data['gpu_vram_total']:.0f} MB")
+        if summary_data.get("avg_ram_used_mb") is not None:
+            used_gb = summary_data['avg_ram_used_mb'] / 1024
+            total_gb = (summary_data.get('ram_total_mb') or 0) / 1024
+            avail_gb = (summary_data.get('avg_ram_available_mb') or 0) / 1024
+            print(f"  RAM:           {used_gb:.1f}/{total_gb:.1f} GB  Avail: {avail_gb:.1f} GB")
+        print()
+
+        print("THERMALS")
+        if summary_data.get("avg_gpu_temp") is not None:
+            print(f"  GPU Avg:       {summary_data['avg_gpu_temp']:.0f}\u00b0C  Peak: {summary_data.get('max_gpu_temp', 0):.0f}\u00b0C")
+        else:
+            print("  GPU:           N/A")
+        print()
+
+        print("BOTTLENECK")
+        bn_type = bottleneck_data.get("bottleneck", "INSUFFICIENT_DATA")
+        bn_conf = bottleneck_data.get("confidence", 0)
+        conf_label = "HIGH" if bn_conf >= 70 else ("MODERATE" if bn_conf >= 40 else ("LOW" if bn_conf > 0 else "INCONCLUSIVE"))
+        print(f"  Result:        {bn_type}")
+        print(f"  Confidence:    {conf_label} ({bn_conf}%)")
+        for ev in bottleneck_data.get("evidence", [])[:3]:
+            print(f"  Evidence:      {ev}")
+        for rec in bottleneck_data.get("recommendations", [])[:2]:
+            print(f"  Recommendation: {rec}")
+        print()
+
+        overhead = status.get("overhead", {})
+        print("OVERHEAD")
+        print(f"  Collection:    {overhead.get('avg_collection_time_ms', 0):.1f}ms avg, {overhead.get('peak_collection_time_ms', 0):.1f}ms peak")
+        print(f"  CPU Impact:    {overhead.get('cpu_overhead_percent', 0):.2f}%")
         print()
         print("=" * 50)
         return 0

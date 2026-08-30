@@ -18,6 +18,8 @@ class DataAvailability(Enum):
     DETECTED = "DETECTED"
     INFERRED = "INFERRED"
     NOT_AVAILABLE = "NOT_AVAILABLE"
+    FAILED = "FAILED"
+    STALE = "STALE"
 
 
 class EventType(Enum):
@@ -286,4 +288,100 @@ class PerformanceSummary:
             "frame_spikes": self.frame_spikes,
             "stability_score": self.stability_score,
             "stability_rating": self.stability_rating,
+        }
+
+
+class TelemetryMetricState(Enum):
+    """State of an individual telemetry metric."""
+    MEASURED = "MEASURED"
+    NOT_AVAILABLE = "NOT_AVAILABLE"
+    FAILED = "FAILED"
+    STALE = "STALE"
+
+
+class FramePacingStatus(Enum):
+    """Frame pacing classification."""
+    STABLE = "STABLE"
+    MILDLY_UNSTABLE = "MILDLY_UNSTABLE"
+    UNSTABLE = "UNSTABLE"
+    INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
+
+
+class TargetStatus(Enum):
+    """Status of the monitored emulator target."""
+    ACTIVE = "ACTIVE"
+    STOPPED = "STOPPED"
+    PID_REUSE_DETECTED = "PID_REUSE_DETECTED"
+    NOT_DETECTED = "NOT_DETECTED"
+
+
+@dataclass
+class MetricValue:
+    """A metric with explicit state tracking."""
+    value: Optional[float] = None
+    state: TelemetryMetricState = TelemetryMetricState.NOT_AVAILABLE
+    last_updated: float = 0.0
+
+    def is_available(self) -> bool:
+        return self.state == TelemetryMetricState.MEASURED and self.value is not None
+
+    def to_dict(self) -> dict:
+        return {
+            "value": self.value,
+            "state": self.state.value,
+            "last_updated": self.last_updated,
+        }
+
+
+@dataclass
+class BeforeAfterSnapshot:
+    """Snapshot for optimization correlation."""
+    label: str = ""  # "BEFORE", "AFTER", etc.
+    timestamp: float = 0.0
+    fps: MetricValue = field(default_factory=MetricValue)
+    one_percent_low: MetricValue = field(default_factory=MetricValue)
+    point_one_percent_low: MetricValue = field(default_factory=MetricValue)
+    frame_time_ms: MetricValue = field(default_factory=MetricValue)
+    cpu_percent: MetricValue = field(default_factory=MetricValue)
+    gpu_percent: MetricValue = field(default_factory=MetricValue)
+    gpu_temp_c: MetricValue = field(default_factory=MetricValue)
+    ram_used_mb: MetricValue = field(default_factory=MetricValue)
+    ram_available_mb: MetricValue = field(default_factory=MetricValue)
+    emulator_cpu_percent: MetricValue = field(default_factory=MetricValue)
+    emulator_ram_mb: MetricValue = field(default_factory=MetricValue)
+    stability_score: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "label": self.label,
+            "timestamp": self.timestamp,
+            "fps": self.fps.to_dict(),
+            "one_percent_low": self.one_percent_low.to_dict(),
+            "frame_time_ms": self.frame_time_ms.to_dict(),
+            "cpu_percent": self.cpu_percent.to_dict(),
+            "gpu_percent": self.gpu_percent.to_dict(),
+            "gpu_temp_c": self.gpu_temp_c.to_dict(),
+            "ram_used_mb": self.ram_used_mb.to_dict(),
+            "stability_score": self.stability_score,
+        }
+
+
+@dataclass
+class TelemetryOverhead:
+    """Measurement of the telemetry engine's own overhead."""
+    collection_time_ms: float = 0.0
+    avg_collection_time_ms: float = 0.0
+    peak_collection_time_ms: float = 0.0
+    samples_per_second: float = 0.0
+    cpu_overhead_percent: float = 0.0
+    measurement_count: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "collection_time_ms": self.collection_time_ms,
+            "avg_collection_time_ms": self.avg_collection_time_ms,
+            "peak_collection_time_ms": self.peak_collection_time_ms,
+            "samples_per_second": self.samples_per_second,
+            "cpu_overhead_percent": self.cpu_overhead_percent,
+            "measurement_count": self.measurement_count,
         }
