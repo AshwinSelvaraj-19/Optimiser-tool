@@ -820,6 +820,46 @@ class OptimizerPage(QWidget):
 
         layout.addWidget(self.rec_frame)
 
+        # ── ADAPTIVE OPTIMIZATION ──
+        self.adaptive_frame = QFrame()
+        self.adaptive_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
+        adapt_layout = QVBoxLayout(self.adaptive_frame)
+        adapt_layout.setContentsMargins(12, 8, 12, 8)
+        adapt_layout.setSpacing(3)
+
+        adapt_header = QHBoxLayout()
+        adapt_title = QLabel("ADAPTIVE OPTIMIZATION")
+        adapt_title.setStyleSheet(f"""
+            color: {TEXT_PRIMARY}; font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
+        """)
+        adapt_header.addWidget(adapt_title)
+        adapt_header.addStretch()
+        self.adaptive_state_label = QLabel("")
+        self.adaptive_state_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_MONO};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        adapt_header.addWidget(self.adaptive_state_label)
+        adapt_layout.addLayout(adapt_header)
+
+        self.adaptive_profile_label = QLabel("Profile: —")
+        self.adaptive_profile_label.setStyleSheet(f"""
+            color: {TEXT_SECONDARY}; font-family: {FONT_MONO};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        adapt_layout.addWidget(self.adaptive_profile_label)
+
+        self.adaptive_action_label = QLabel("Top: —")
+        self.adaptive_action_label.setWordWrap(True)
+        self.adaptive_action_label.setStyleSheet(f"""
+            color: {TEXT_SECONDARY}; font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        adapt_layout.addWidget(self.adaptive_action_label)
+
+        layout.addWidget(self.adaptive_frame)
+
         # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
@@ -937,6 +977,7 @@ class OptimizerPage(QWidget):
         self._load_startup_status()
         self._load_telemetry_status()
         self._load_recommendations()
+        self._load_adaptive_status()
 
     def _load_status(self):
         """Load current optimization status with live target detection."""
@@ -1996,6 +2037,68 @@ class OptimizerPage(QWidget):
 
         except Exception as e:
             logger.debug(f"Recommendations load: {e}")
+
+    def _load_adaptive_status(self):
+        """Load adaptive optimization status into the compact section."""
+        try:
+            from app.core.adaptive_optimizer import adaptive_optimizer
+            from app.core.optimizer import optimizer
+            from app.core.telemetry import telemetry_engine
+            from app.performance.telemetry_models import TelemetrySample, BottleneckType
+
+            # Get optimization states
+            opt_status = optimizer.get_current_status()
+            states = {o["id"]: o.get("status", "UNKNOWN") for o in opt_status.get("optimizations", [])}
+            target_name = opt_status.get("target_name", "")
+            target_pid = opt_status.get("target_pid", 0)
+
+            # Get telemetry samples
+            frame = telemetry_engine.current
+            samples = []
+            if frame and frame.timestamp > 0:
+                sample = TelemetrySample(
+                    timestamp=frame.timestamp,
+                    emulator_pid=target_pid,
+                    emulator_name=target_name,
+                    cpu_total_percent=frame.cpu_utilization,
+                    gpu_utilization_percent=frame.gpu_utilization,
+                    system_ram_used_mb=frame.ram_used_mb,
+                    system_ram_total_mb=frame.ram_total_mb,
+                    system_ram_available_mb=frame.ram_total_mb - frame.ram_used_mb if frame.ram_total_mb else None,
+                )
+                samples.append(sample)
+
+            state, confidence, evidence = adaptive_optimizer.classify_state(samples)
+            state_str = state.value.replace("_", " ").title()
+
+            self.adaptive_state_label.setText(f"{state_str} ({confidence}%)")
+
+            plan = adaptive_optimizer.generate_plan(
+                samples=samples, state=state, state_confidence=confidence,
+                state_evidence=evidence, optimization_states=states,
+                target_name=target_name, target_pid=target_pid,
+            )
+
+            self.adaptive_profile_label.setText(f"Profile: {plan.recommended_profile.upper()}")
+
+            applicable = [a for a in plan.actions if a.status.value in (
+                "APPLIED", "ALREADY_OPTIMAL", "REQUIRES_ADMIN", "RECOMMENDATION_ONLY",
+            )]
+            if applicable:
+                first = applicable[0]
+                self.adaptive_action_label.setText(
+                    f"Top: {first.optimization_name} — {first.status.value.replace('_', ' ')}"
+                )
+            else:
+                if state.value == "OPTIMAL":
+                    self.adaptive_action_label.setText("System is optimal — no actions needed")
+                elif state.value == "INSUFFICIENT_DATA":
+                    self.adaptive_action_label.setText("Collect more telemetry")
+                else:
+                    self.adaptive_action_label.setText("")
+
+        except Exception as e:
+            logger.debug(f"Adaptive status load: {e}")
 
     def _log(self, msg):
         self.log_text.append(msg)

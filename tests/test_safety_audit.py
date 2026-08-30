@@ -818,27 +818,28 @@ class TestPerformanceReportEdgeCases:
 class TestAdaptiveOptimizerEdgeCases:
     """Bottleneck classification edge cases."""
 
-    def test_bottleneck_type_all_values(self):
-        from app.core.adaptive_optimizer import BottleneckType
-        values = [b.value for b in BottleneckType]
-        assert "CPU" in values
-        assert "GPU" in values
-        assert "MEMORY" in values
-        assert "THERMAL" in values
-        assert "UNKNOWN" in values
+    def test_adaptive_state_all_values(self):
+        from app.core.adaptive_optimizer import AdaptiveState
+        values = [s.value for s in AdaptiveState]
+        assert "CPU_BOUND" in values
+        assert "GPU_BOUND" in values
+        assert "MEMORY_BOUND" in values
+        assert "THERMAL_LIMITED" in values
+        assert "OPTIMAL" in values
+        assert "INSUFFICIENT_DATA" in values
 
-    def test_optimization_decision_defaults(self):
-        from app.core.adaptive_optimizer import OptimizationDecision, BottleneckType
-        d = OptimizationDecision()
-        assert d.bottleneck == BottleneckType.UNKNOWN
-        assert d.bottleneck_confidence == 0.0
-        assert d.evidence == []
+    def test_adaptive_plan_defaults(self):
+        from app.core.adaptive_optimizer import AdaptivePlan, AdaptiveState
+        p = AdaptivePlan()
+        assert p.state == AdaptiveState.INSUFFICIENT_DATA
+        assert p.confidence == 0
+        assert p.actions == []
 
-    def test_bottleneck_evidence_defaults(self):
-        from app.core.adaptive_optimizer import BottleneckEvidence, BottleneckType
-        e = BottleneckEvidence()
-        assert e.bottleneck_type == BottleneckType.UNKNOWN
-        assert e.metric_value == 0.0
+    def test_adaptive_action_defaults(self):
+        from app.core.adaptive_optimizer import AdaptiveAction, ActionStatus
+        a = AdaptiveAction()
+        assert a.status == ActionStatus.SKIPPED_INSUFFICIENT_EVIDENCE
+        assert a.confidence == 0
 
 
 # ── 12. RESOURCE ANALYZER EDGE CASES ─────────────────────────

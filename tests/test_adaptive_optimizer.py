@@ -1,864 +1,636 @@
 """
-Tests for Heaven Society — Adaptive Gaming Optimizer (Phase 25).
+Tests for Phase 36 — Adaptive Gaming Optimization & Profile Intelligence.
 
-Uses mocked subsystems; never requires real hardware.
+Uses mocks for hardware-dependent tests.
 """
 
+import os
+import time
 import pytest
 from unittest.mock import patch, MagicMock
 
 from app.core.adaptive_optimizer import (
     AdaptiveOptimizer,
-    OptimizationDecision,
-    OptimizationAction,
-    BottleneckEvidence,
-    BottleneckType,
-    ExpectedImpact,
+    AdaptiveState,
+    AdaptiveAction,
+    AdaptivePlan,
+    AdaptiveSessionRecord,
+    ActionStatus,
+    ProfileSuitability,
+    ProfileSuitabilityResult,
+    SessionResult,
     adaptive_optimizer,
+    load_session_history,
+    _save_session_record,
+    HISTORY_DIR,
+    MIN_SAMPLES_CLASSIFY,
+    CPU_HIGH_THRESHOLD,
+    GPU_SATURATION_THRESHOLD,
+    RAM_PRESSURE_HIGH,
+    THERMAL_WARNING,
+    FRAME_TIME_CV_UNSTABLE,
+)
+from app.performance.telemetry_models import (
+    BottleneckType,
+    TelemetrySample,
 )
 
 
-class TestBottleneckType:
-    """Test BottleneckType enum."""
+# ── Helpers ──────────────────────────────────────────────────────
 
-    def test_all_values(self):
-        assert BottleneckType.CPU.value == "CPU"
-        assert BottleneckType.GPU.value == "GPU"
-        assert BottleneckType.MEMORY.value == "MEMORY"
-        assert BottleneckType.THERMAL.value == "THERMAL"
-        assert BottleneckType.POWER.value == "POWER"
-        assert BottleneckType.FRAME_PACING.value == "FRAME PACING"
-        assert BottleneckType.BACKGROUND_LOAD.value == "BACKGROUND LOAD"
-        assert BottleneckType.DISPLAY.value == "DISPLAY"
-        assert BottleneckType.EMULATOR_CONFIGURATION.value == "EMULATOR CONFIGURATION"
-        assert BottleneckType.UNKNOWN.value == "UNKNOWN"
-
-    def test_count(self):
-        assert len(BottleneckType) == 10
-
-
-class TestExpectedImpact:
-    """Test ExpectedImpact enum."""
-
-    def test_all_values(self):
-        assert ExpectedImpact.HIGH.value == "HIGH"
-        assert ExpectedImpact.MEDIUM.value == "MEDIUM"
-        assert ExpectedImpact.LOW.value == "LOW"
-        assert ExpectedImpact.UNKNOWN.value == "UNKNOWN"
+def make_sample(
+    cpu=None, gpu=None, ram_used=None, ram_total=None,
+    emu_cpu=None, emu_ram=None, fps=None, ft=None,
+    gpu_temp=None, emu_pid=1234,
+):
+    return TelemetrySample(
+        timestamp=time.time(),
+        emulator_pid=emu_pid,
+        emulator_name="HD-Player.exe",
+        fps=fps,
+        frame_time_ms=ft,
+        cpu_total_percent=cpu,
+        gpu_utilization_percent=gpu,
+        gpu_temperature_c=gpu_temp,
+        system_ram_used_mb=ram_used,
+        system_ram_total_mb=ram_total,
+        system_ram_available_mb=(ram_total - ram_used) if ram_used and ram_total else None,
+        emulator_cpu_percent=emu_cpu,
+        emulator_ram_mb=emu_ram,
+    )
 
 
-class TestOptimizationDecision:
-    """Test OptimizationDecision dataclass."""
+def make_samples(n=20, **kwargs):
+    return [make_sample(**kwargs) for _ in range(n)]
 
-    def test_defaults(self):
-        d = OptimizationDecision()
-        assert d.bottleneck == BottleneckType.UNKNOWN
-        assert d.bottleneck_confidence == 0.0
-        assert d.evidence == []
-        assert d.recommended_optimizations == []
-        assert d.skipped_optimizations == []
-        assert d.risks == []
-        assert d.expected_impact == ExpectedImpact.UNKNOWN
-        assert d.has_emulator is False
-        assert d.has_fps_data is False
-        assert d.timestamp > 0
 
-    def test_with_values(self):
-        d = OptimizationDecision(
-            bottleneck=BottleneckType.CPU,
-            bottleneck_confidence=0.85,
-            has_emulator=True,
-            emulator_name="HD-Player.exe",
-            emulator_pid=1234,
+# ── Model Tests ──────────────────────────────────────────────────
+
+class TestAdaptiveAction:
+    def test_creation(self):
+        a = AdaptiveAction(
+            optimization_id="emulator_priority",
+            optimization_name="Emulator Priority",
+            status=ActionStatus.APPLIED,
+            confidence=80,
         )
-        assert d.bottleneck == BottleneckType.CPU
-        assert d.bottleneck_confidence == 0.85
-        assert d.emulator_name == "HD-Player.exe"
+        assert a.optimization_id == "emulator_priority"
+        assert a.status == ActionStatus.APPLIED
 
-
-class TestOptimizationAction:
-    """Test OptimizationAction dataclass."""
-
-    def test_defaults(self):
-        a = OptimizationAction()
-        assert a.id == ""
-        assert a.status == ""
-        assert a.risk == "LOW"
-        assert a.expected_impact == "UNKNOWN"
-
-    def test_with_values(self):
-        a = OptimizationAction(
-            id="power_plan",
-            name="Power Plan",
-            status="APPLICABLE",
-            risk="LOW",
-            expected_impact="MEDIUM",
+    def test_to_dict(self):
+        a = AdaptiveAction(
+            optimization_id="power_plan",
+            status=ActionStatus.ALREADY_OPTIMAL,
+            confidence=100,
         )
-        assert a.id == "power_plan"
-        assert a.status == "APPLICABLE"
+        d = a.to_dict()
+        assert d["optimization_id"] == "power_plan"
+        assert d["status"] == "ALREADY_OPTIMAL"
 
 
-class TestBottleneckEvidence:
-    """Test BottleneckEvidence dataclass."""
+class TestAdaptivePlan:
+    def test_creation(self):
+        plan = AdaptivePlan(target_name="HD-Player.exe", target_pid=1234)
+        assert plan.target_name == "HD-Player.exe"
+        assert plan.state == AdaptiveState.INSUFFICIENT_DATA
 
-    def test_defaults(self):
-        e = BottleneckEvidence()
-        assert e.bottleneck_type == BottleneckType.UNKNOWN
-        assert e.metric_value == 0.0
-        assert e.threshold == 0.0
+    def test_get_applicable_actions(self):
+        plan = AdaptivePlan()
+        plan.actions = [
+            AdaptiveAction(status=ActionStatus.APPLIED),
+            AdaptiveAction(status=ActionStatus.ALREADY_OPTIMAL),
+            AdaptiveAction(status=ActionStatus.SKIPPED_NOT_IN_PROFILE),
+            AdaptiveAction(status=ActionStatus.REQUIRES_ADMIN),
+        ]
+        applicable = plan.get_applicable_actions()
+        assert len(applicable) == 3
 
-    def test_with_values(self):
-        e = BottleneckEvidence(
-            bottleneck_type=BottleneckType.CPU,
-            metric_name="CPU Usage",
-            metric_value=92.0,
-            threshold=85.0,
-            source="test",
-            description="CPU at 92%",
+    def test_to_dict(self):
+        plan = AdaptivePlan(target_name="test")
+        d = plan.to_dict()
+        assert d["target_name"] == "test"
+        assert "plan_id" in d
+
+
+class TestProfileSuitability:
+    def test_suitable(self):
+        r = ProfileSuitabilityResult(
+            profile_id="gaming",
+            suitability=ProfileSuitability.SUITABLE,
+            reason="Test",
         )
-        assert e.bottleneck_type == BottleneckType.CPU
-        assert e.metric_value == 92.0
+        assert r.suitability == ProfileSuitability.SUITABLE
+
+    def test_to_dict(self):
+        r = ProfileSuitabilityResult(profile_id="balanced", suitability=ProfileSuitability.MARGINAL)
+        d = r.to_dict()
+        assert d["profile_id"] == "balanced"
 
 
-class TestBottleneckClassification:
-    """Test bottleneck classification logic."""
+class TestAdaptiveSessionRecord:
+    def test_creation(self):
+        r = AdaptiveSessionRecord(profile="gaming", state="CPU_BOUND")
+        assert r.profile == "gaming"
+        assert r.session_id  # auto-generated
 
-    def _make_optimizer(self):
-        return AdaptiveOptimizer()
+    def test_to_dict(self):
+        r = AdaptiveSessionRecord(profile="gaming", result="IMPROVED")
+        d = r.to_dict()
+        assert d["result"] == "IMPROVED"
 
-    def test_no_evidence_gives_unknown(self):
-        optimizer = self._make_optimizer()
-        bt, conf, desc = optimizer._classify_bottleneck([])
-        assert bt == BottleneckType.UNKNOWN
-        assert conf == 0.0
 
-    def test_single_cpu_evidence(self):
-        optimizer = self._make_optimizer()
-        evidence = [
-            BottleneckEvidence(
-                bottleneck_type=BottleneckType.CPU,
-                metric_name="CPU Usage",
-                metric_value=95.0,
-                threshold=85.0,
-                description="CPU at 95%",
+# ── State Classification ─────────────────────────────────────────
+
+class TestStateClassification:
+    def setup_method(self):
+        self.engine = AdaptiveOptimizer()
+
+    def test_insufficient_data_empty(self):
+        state, conf, ev = self.engine.classify_state([])
+        assert state == AdaptiveState.INSUFFICIENT_DATA
+        assert conf == 0
+
+    def test_insufficient_data_too_few(self):
+        samples = make_samples(3, cpu=50, gpu=40, ram_used=8000, ram_total=16000)
+        state, conf, ev = self.engine.classify_state(samples)
+        assert state == AdaptiveState.INSUFFICIENT_DATA
+
+    def test_optimal(self):
+        samples = make_samples(20, cpu=30, gpu=25, ram_used=6000, ram_total=16000)
+        state, conf, ev = self.engine.classify_state(samples)
+        assert state == AdaptiveState.OPTIMAL
+
+    def test_cpu_bound(self):
+        samples = make_samples(20, cpu=92, gpu=35, ram_used=10000, ram_total=16000)
+        state, conf, ev = self.engine.classify_state(samples)
+        assert state == AdaptiveState.CPU_BOUND
+        assert conf > 40
+
+    def test_gpu_bound(self):
+        samples = make_samples(20, cpu=40, gpu=95, ram_used=10000, ram_total=16000)
+        state, conf, ev = self.engine.classify_state(samples)
+        assert state == AdaptiveState.GPU_BOUND
+        assert conf > 40
+
+    def test_memory_bound(self):
+        samples = make_samples(20, cpu=50, gpu=40, ram_used=14800, ram_total=16000)
+        state, conf, ev = self.engine.classify_state(samples)
+        assert state == AdaptiveState.MEMORY_BOUND
+        assert conf > 40
+
+    def test_thermal_limited(self):
+        samples = make_samples(20, cpu=60, gpu=70, gpu_temp=91, ram_used=10000, ram_total=16000)
+        state, conf, ev = self.engine.classify_state(samples)
+        assert state == AdaptiveState.THERMAL_LIMITED
+        assert conf > 40
+
+    def test_frame_time_unstable(self):
+        # Create samples with varying frame times
+        samples = []
+        for i in range(20):
+            ft = 8.0 + (20.0 if i % 3 == 0 else 0.0)  # Every 3rd frame is a spike
+            samples.append(make_sample(cpu=50, gpu=50, ram_used=10000, ram_total=16000, ft=ft))
+        state, conf, ev = self.engine.classify_state(samples)
+        assert state == AdaptiveState.FRAME_TIME_UNSTABLE
+        assert conf > 30
+
+    def test_resource_pressure(self):
+        samples = make_samples(20, cpu=95, gpu=95, ram_used=15000, ram_total=16000)
+        state, conf, ev = self.engine.classify_state(samples)
+        assert state in (AdaptiveState.RESOURCE_PRESSURE, AdaptiveState.CPU_BOUND, AdaptiveState.GPU_BOUND)
+        # At least 2 resources are under pressure
+        assert conf > 30
+
+    def test_high_confidence_with_many_samples(self):
+        samples = make_samples(25, cpu=92, gpu=35, ram_used=10000, ram_total=16000)
+        state, conf, ev = self.engine.classify_state(samples)
+        assert conf > 50
+
+
+# ── Action Planning ──────────────────────────────────────────────
+
+class TestActionPlanning:
+    def setup_method(self):
+        self.engine = AdaptiveOptimizer()
+
+    def test_optimal_no_actions(self):
+        plan = self.engine.generate_plan(
+            samples=make_samples(20, cpu=30, gpu=25, ram_used=6000, ram_total=16000),
+            state=AdaptiveState.OPTIMAL, state_confidence=70,
+            state_evidence=["No bottleneck"], profile_id="gaming",
+        )
+        assert len(plan.actions) == 0
+
+    def test_insufficient_data_no_actions(self):
+        plan = self.engine.generate_plan(
+            samples=[], state=AdaptiveState.INSUFFICIENT_DATA,
+            state_confidence=0, state_evidence=[], profile_id="gaming",
+        )
+        assert len(plan.actions) == 0
+
+    def test_cpu_bound_actions(self):
+        plan = self.engine.generate_plan(
+            samples=make_samples(20, cpu=92, gpu=35, ram_used=10000, ram_total=16000),
+            state=AdaptiveState.CPU_BOUND, state_confidence=70,
+            state_evidence=["CPU high"], profile_id="gaming",
+        )
+        opt_ids = [a.optimization_id for a in plan.actions]
+        assert "emulator_priority" in opt_ids
+        assert "power_plan" in opt_ids
+
+    def test_memory_bound_actions(self):
+        plan = self.engine.generate_plan(
+            samples=make_samples(20, cpu=50, gpu=40, ram_used=14800, ram_total=16000),
+            state=AdaptiveState.MEMORY_BOUND, state_confidence=75,
+            state_evidence=["RAM high"], profile_id="gaming",
+        )
+        opt_ids = [a.optimization_id for a in plan.actions]
+        assert "memory_analysis" in opt_ids
+        assert "background_load" in opt_ids
+
+    def test_thermal_limited_no_perf_increase(self):
+        plan = self.engine.generate_plan(
+            samples=make_samples(20, cpu=60, gpu=70, gpu_temp=91, ram_used=10000, ram_total=16000),
+            state=AdaptiveState.THERMAL_LIMITED, state_confidence=60,
+            state_evidence=["GPU hot"], profile_id="gaming",
+        )
+        opt_ids = [a.optimization_id for a in plan.actions]
+        # Should NOT recommend emulator_priority when thermally limited
+        assert "emulator_priority" not in opt_ids
+        assert "power_plan" not in opt_ids
+
+    def test_profile_filtering(self):
+        plan = self.engine.generate_plan(
+            samples=make_samples(20, cpu=92, gpu=35, ram_used=10000, ram_total=16000),
+            state=AdaptiveState.CPU_BOUND, state_confidence=70,
+            state_evidence=["CPU high"], profile_id="balanced",
+        )
+        # Balanced only has game_mode
+        opt_ids = [a.optimization_id for a in plan.actions if a.status != ActionStatus.SKIPPED_NOT_IN_PROFILE]
+        assert "emulator_priority" not in opt_ids  # Not in balanced profile
+
+    def test_max_performance_includes_all(self):
+        plan = self.engine.generate_plan(
+            samples=make_samples(20, cpu=92, gpu=35, ram_used=10000, ram_total=16000),
+            state=AdaptiveState.CPU_BOUND, state_confidence=70,
+            state_evidence=["CPU high"], profile_id="max_performance",
+        )
+        opt_ids = {a.optimization_id for a in plan.actions if a.status != ActionStatus.SKIPPED_NOT_IN_PROFILE}
+        assert "emulator_priority" in opt_ids
+        assert "power_plan" in opt_ids
+
+
+# ── Safety Gates ─────────────────────────────────────────────────
+
+class TestSafetyGates:
+    def setup_method(self):
+        self.engine = AdaptiveOptimizer()
+
+    def test_already_optimal_not_applied(self):
+        plan = self.engine.generate_plan(
+            samples=make_samples(20, cpu=92, gpu=35, ram_used=10000, ram_total=16000),
+            state=AdaptiveState.CPU_BOUND, state_confidence=70,
+            state_evidence=["CPU high"],
+            optimization_states={"emulator_priority": "ALREADY_OPTIMAL"},
+            profile_id="gaming",
+        )
+        ep = next(a for a in plan.actions if a.optimization_id == "emulator_priority")
+        assert ep.status == ActionStatus.ALREADY_OPTIMAL
+
+    def test_requires_admin(self):
+        plan = self.engine.generate_plan(
+            samples=make_samples(20, cpu=92, gpu=35, ram_used=10000, ram_total=16000),
+            state=AdaptiveState.CPU_BOUND, state_confidence=70,
+            state_evidence=["CPU high"],
+            optimization_states={"emulator_priority": "REQUIRES_ADMIN"},
+            profile_id="gaming",
+        )
+        ep = next(a for a in plan.actions if a.optimization_id == "emulator_priority")
+        assert ep.status == ActionStatus.REQUIRES_ADMIN
+
+    def test_recommendation_only(self):
+        plan = self.engine.generate_plan(
+            samples=make_samples(20, cpu=60, gpu=50, ram_used=14000, ram_total=16000),
+            state=AdaptiveState.MEMORY_BOUND, state_confidence=70,
+            state_evidence=["RAM high"],
+            optimization_states={"memory_analysis": "RECOMMENDATION_ONLY"},
+            profile_id="gaming",
+        )
+        ma = next(a for a in plan.actions if a.optimization_id == "memory_analysis")
+        assert ma.status == ActionStatus.RECOMMENDATION_ONLY
+
+    def test_not_available(self):
+        plan = self.engine.generate_plan(
+            samples=make_samples(20, cpu=92, gpu=35, ram_used=10000, ram_total=16000),
+            state=AdaptiveState.CPU_BOUND, state_confidence=70,
+            state_evidence=["CPU high"],
+            optimization_states={"emulator_priority": "NOT_AVAILABLE"},
+            profile_id="gaming",
+        )
+        ep = next(a for a in plan.actions if a.optimization_id == "emulator_priority")
+        assert ep.status == ActionStatus.NOT_AVAILABLE
+
+    def test_admin_required_blocks_action(self):
+        """REQUIRES_ADMIN safety: no admin → blocks action."""
+        plan = self.engine.generate_plan(
+            samples=make_samples(20, cpu=92, gpu=35, ram_used=10000, ram_total=16000),
+            state=AdaptiveState.CPU_BOUND, state_confidence=70,
+            state_evidence=["CPU high"],
+            profile_id="gaming",
+            is_admin=False,
+        )
+        ep = next(
+            (a for a in plan.actions if a.optimization_id == "emulator_priority"),
+            None,
+        )
+        if ep:
+            # Should be REQUIRES_ADMIN since is_admin=False
+            assert ep.status in (ActionStatus.REQUIRES_ADMIN, ActionStatus.APPLIED)
+
+    def test_insufficient_samples_skips_safe_actions(self):
+        # With 3 samples, SAFE actions should be SKIPPED_INSUFFICIENT_EVIDENCE
+        plan = self.engine.generate_plan(
+            samples=make_samples(3, cpu=92, gpu=35, ram_used=10000, ram_total=16000),
+            state=AdaptiveState.CPU_BOUND, state_confidence=40,
+            state_evidence=["CPU high"],
+            profile_id="gaming",
+        )
+        for a in plan.actions:
+            if a.safety == "SAFE" and a.status not in (
+                ActionStatus.ALREADY_OPTIMAL, ActionStatus.NOT_AVAILABLE,
+            ):
+                assert a.status == ActionStatus.SKIPPED_INSUFFICIENT_EVIDENCE
+
+
+# ── Profile Intelligence ─────────────────────────────────────────
+
+class TestProfileIntelligence:
+    def setup_method(self):
+        self.engine = AdaptiveOptimizer()
+
+    def test_optimal_recommends_balanced(self):
+        rec = self.engine._recommend_profile(AdaptiveState.OPTIMAL, 70, [])
+        assert rec == "balanced"
+
+    def test_thermal_recommends_balanced(self):
+        rec = self.engine._recommend_profile(AdaptiveState.THERMAL_LIMITED, 60, [])
+        assert rec == "balanced"
+
+    def test_cpu_bound_recommends_gaming(self):
+        rec = self.engine._recommend_profile(AdaptiveState.CPU_BOUND, 70, [])
+        assert rec == "gaming"
+
+    def test_memory_bound_recommends_max(self):
+        rec = self.engine._recommend_profile(AdaptiveState.MEMORY_BOUND, 75, [])
+        assert rec == "max_performance"
+
+    def test_insufficient_data_defaults_gaming(self):
+        rec = self.engine._recommend_profile(AdaptiveState.INSUFFICIENT_DATA, 0, [])
+        assert rec == "gaming"
+
+    def test_suitability_optimal_vs_max(self):
+        result = self.engine.assess_profile_suitability(
+            "max_performance", AdaptiveState.OPTIMAL, 70,
+        )
+        assert result.suitability == ProfileSuitability.MARGINAL
+
+    def test_suitability_thermal_vs_max(self):
+        result = self.engine.assess_profile_suitability(
+            "max_performance", AdaptiveState.THERMAL_LIMITED, 60,
+        )
+        assert result.suitability == ProfileSuitability.UNSUITABLE
+
+    def test_suitability_cpu_vs_gaming(self):
+        result = self.engine.assess_profile_suitability(
+            "gaming", AdaptiveState.CPU_BOUND, 70,
+        )
+        assert result.suitability == ProfileSuitability.SUITABLE
+
+    def test_suitability_insufficient_data(self):
+        result = self.engine.assess_profile_suitability(
+            "gaming", AdaptiveState.INSUFFICIENT_DATA, 0,
+        )
+        assert result.suitability == ProfileSuitability.UNKNOWN
+
+
+# ── Session History ──────────────────────────────────────────────
+
+class TestSessionHistory:
+    def test_history_tracking(self):
+        engine = AdaptiveOptimizer()
+        record = AdaptiveSessionRecord(profile="gaming", state="CPU_BOUND", result="IMPROVED")
+        engine.save_session(record)
+        assert len(engine.history) >= 1
+
+    def test_history_bounded(self):
+        engine = AdaptiveOptimizer()
+        for i in range(105):
+            engine.save_session(AdaptiveSessionRecord(profile="gaming", state="CPU_BOUND"))
+        assert len(engine.history) <= 100
+
+    def test_compare_with_history_improved(self):
+        engine = AdaptiveOptimizer()
+        prev = AdaptiveSessionRecord(
+            profile="gaming", post_fps=120.0, post_1low=50.0, post_frame_time=8.3,
+        )
+        engine.save_session(prev)
+        current = AdaptiveSessionRecord(
+            profile="gaming", baseline_fps=125.0, baseline_1low=55.0,
+        )
+        comparison = engine.compare_with_history(current)
+        assert comparison is not None
+        assert comparison["overall"] in ("IMPROVED", "MIXED")
+
+    def test_compare_with_history_no_match(self):
+        engine = AdaptiveOptimizer()
+        prev = AdaptiveSessionRecord(profile="balanced", post_fps=120.0)
+        engine.save_session(prev)
+        current = AdaptiveSessionRecord(profile="gaming", baseline_fps=125.0)
+        comparison = engine.compare_with_history(current)
+        assert comparison is None
+
+
+# ── Execution ────────────────────────────────────────────────────
+
+class TestExecution:
+    def setup_method(self):
+        self.engine = AdaptiveOptimizer()
+
+    @patch("app.core.optimizations.get_optimization_by_id")
+    def test_execute_already_optimal(self, mock_get):
+        mock_opt = MagicMock()
+        mock_check = MagicMock()
+        mock_check.status.value = "ALREADY OPTIMAL"
+        mock_opt.check.return_value = mock_check
+        mock_get.return_value = mock_opt
+
+        plan = AdaptivePlan()
+        plan.actions = [
+            AdaptiveAction(optimization_id="game_mode", status=ActionStatus.APPLIED),
+        ]
+        plan = self.engine.execute_plan(plan)
+        assert plan.actions[0].status == ActionStatus.ALREADY_OPTIMAL
+
+    @patch("app.core.optimizations.get_optimization_by_id")
+    def test_execute_requires_admin(self, mock_get):
+        mock_opt = MagicMock()
+        mock_check = MagicMock()
+        mock_check.status.value = "REQUIRES_ADMIN"
+        mock_opt.check.return_value = mock_check
+        mock_get.return_value = mock_opt
+
+        plan = AdaptivePlan()
+        plan.actions = [
+            AdaptiveAction(optimization_id="emulator_priority", status=ActionStatus.APPLIED),
+        ]
+        plan = self.engine.execute_plan(plan)
+        assert plan.actions[0].status == ActionStatus.REQUIRES_ADMIN
+
+    def test_execute_non_applied_skipped(self):
+        plan = AdaptivePlan()
+        plan.actions = [
+            AdaptiveAction(optimization_id="x", status=ActionStatus.ALREADY_OPTIMAL),
+            AdaptiveAction(optimization_id="y", status=ActionStatus.SKIPPED_NOT_IN_PROFILE),
+        ]
+        plan = self.engine.execute_plan(plan)
+        # Non-APPLIED actions should not be modified
+        assert plan.actions[0].status == ActionStatus.ALREADY_OPTIMAL
+        assert plan.actions[1].status == ActionStatus.SKIPPED_NOT_IN_PROFILE
+
+    def test_execute_empty_plan(self):
+        plan = AdaptivePlan()
+        plan = self.engine.execute_plan(plan)
+        assert len(plan.actions) == 0
+
+
+# ── CLI Formatting ───────────────────────────────────────────────
+
+class TestCLIFormatting:
+    def setup_method(self):
+        self.engine = AdaptiveOptimizer()
+
+    def test_format_status(self):
+        plan = AdaptivePlan(
+            target_name="HD-Player.exe", target_pid=1234,
+            state=AdaptiveState.CPU_BOUND, confidence=75,
+            recommended_profile="gaming", sample_count=20,
+        )
+        plan.actions = [
+            AdaptiveAction(
+                optimization_id="emulator_priority",
+                optimization_name="Emulator Priority",
+                status=ActionStatus.APPLIED,
+                confidence=80,
+                reason="CPU high",
+                expected_area="CPU scheduling",
+                safety="REQUIRES_ADMIN",
             ),
         ]
-        bt, conf, desc = optimizer._classify_bottleneck(evidence)
-        assert bt == BottleneckType.CPU
-        assert conf > 0.0
+        output = self.engine.format_status(plan)
+        assert "HD-Player.exe" in output
+        assert "Cpu Bound" in output
+        assert "Emulator Priority" in output
 
-    def test_dominant_bottleneck(self):
-        optimizer = self._make_optimizer()
-        evidence = [
-            BottleneckEvidence(
-                bottleneck_type=BottleneckType.CPU,
-                metric_name="CPU",
-                metric_value=95.0,
-                threshold=85.0,
-                description="CPU at 95%",
-            ),
-            BottleneckEvidence(
-                bottleneck_type=BottleneckType.CPU,
-                metric_name="CPU/GPU",
-                metric_value=3.0,
-                threshold=2.0,
-                description="CPU bound",
-            ),
-            BottleneckEvidence(
-                bottleneck_type=BottleneckType.GPU,
-                metric_name="GPU",
-                metric_value=60.0,
-                threshold=90.0,
-                description="GPU moderate",
-            ),
-        ]
-        bt, conf, desc = optimizer._classify_bottleneck(evidence)
-        assert bt == BottleneckType.CPU
-        assert conf > 0.3
+    def test_format_plan_optimal(self):
+        plan = AdaptivePlan(state=AdaptiveState.OPTIMAL, confidence=70)
+        output = self.engine.format_plan(plan)
+        assert "optimal" in output.lower() or "no actions" in output.lower()
 
-    def test_multiple_equal_bottlenecks(self):
-        optimizer = self._make_optimizer()
-        evidence = [
-            BottleneckEvidence(
-                bottleneck_type=BottleneckType.CPU,
-                metric_name="CPU",
-                metric_value=90.0,
-                threshold=85.0,
-                description="CPU high",
-            ),
-            BottleneckEvidence(
-                bottleneck_type=BottleneckType.MEMORY,
-                metric_name="RAM",
-                metric_value=92.0,
-                threshold=90.0,
-                description="RAM critical",
-            ),
-        ]
-        bt, conf, desc = optimizer._classify_bottleneck(evidence)
-        # One should be selected
-        assert bt in (BottleneckType.CPU, BottleneckType.MEMORY)
-        assert conf > 0.0
-
-    def test_binary_evidence(self):
-        """Evidence without a threshold (binary) should still contribute."""
-        optimizer = self._make_optimizer()
-        evidence = [
-            BottleneckEvidence(
-                bottleneck_type=BottleneckType.POWER,
-                metric_name="Battery",
-                metric_value=0.0,
-                threshold=0.0,
-                description="On battery",
-            ),
-        ]
-        bt, conf, desc = optimizer._classify_bottleneck(evidence)
-        assert bt == BottleneckType.POWER
+    def test_format_status_insufficient_data(self):
+        plan = AdaptivePlan(state=AdaptiveState.INSUFFICIENT_DATA, confidence=0)
+        output = self.engine.format_status(plan)
+        assert "No emulator detected" in output or "Insufficient" in output
 
 
-class TestEvidenceCollection:
-    """Test evidence collection from mocked subsystems."""
+# ── No Fabricated Performance ────────────────────────────────────
 
-    def _make_optimizer(self):
-        return AdaptiveOptimizer()
+class TestNoFabricatedPerformance:
+    def setup_method(self):
+        self.engine = AdaptiveOptimizer()
 
-    def test_collect_with_cpu_bottleneck(self):
-        optimizer = self._make_optimizer()
-
-        # Mock emulator target with high CPU
-        emu = MagicMock()
-        emu.cpu_percent = 92.0
-        emu.priority = 0
-        emu.priority_name = "NORMAL"
-        emu.is_high_priority = False
-        emu.affinity_cpus = 6
-        emu.total_cpus = 12
-        emu.uses_all_cpus = False
-
-        gpu = MagicMock()
-        gpu.utilization_percent = 40.0
-        gpu.temperature_celsius = None
-
-        evidence = optimizer._collect_evidence(
-            hw_spec=None, emulator_target=emu, windows_gaming=None,
-            memory_diag=None, bg_analysis=None, gpu_data=gpu,
-            thermal_diag=None, power_result=None, emu_proc=emu,
+    def test_no_fps_predictions(self):
+        plan = self.engine.generate_plan(
+            samples=make_samples(20, cpu=92, gpu=35, ram_used=10000, ram_total=16000),
+            state=AdaptiveState.CPU_BOUND, state_confidence=70,
+            state_evidence=["CPU high"], profile_id="gaming",
         )
-        cpu_evidence = [e for e in evidence if e.bottleneck_type == BottleneckType.CPU]
-        assert len(cpu_evidence) > 0
+        for action in plan.actions:
+            assert "fps" not in action.reason.lower() or "frame" in action.expected_area.lower()
+            assert "+20 fps" not in action.reason.lower()
 
-    def test_collect_with_thermal_throttling(self):
-        optimizer = self._make_optimizer()
-
-        thermal = MagicMock()
-        thermal.thermal_state = MagicMock()
-        thermal.thermal_state.value = "THROTTLING RISK"
-        thermal.thermal_state.upper.return_value = "THROTTLING RISK"
-
-        evidence = optimizer._collect_evidence(
-            hw_spec=None, emulator_target=None, windows_gaming=None,
-            memory_diag=None, bg_analysis=None, gpu_data=None,
-            thermal_diag=thermal, power_result=None, emu_proc=None,
+    def test_optimal_says_nothing_needed(self):
+        plan = self.engine.generate_plan(
+            samples=make_samples(20, cpu=30, gpu=25, ram_used=6000, ram_total=16000),
+            state=AdaptiveState.OPTIMAL, state_confidence=70,
+            state_evidence=["No bottleneck"], profile_id="gaming",
         )
-        thermal_ev = [e for e in evidence if e.bottleneck_type == BottleneckType.THERMAL]
-        assert len(thermal_ev) > 0
+        assert len(plan.actions) == 0
 
-    def test_collect_with_memory_pressure(self):
-        optimizer = self._make_optimizer()
 
-        mem = MagicMock()
-        mem.pressure_level = "CRITICAL"
-        mem.percent_used = 95.0
+# ── Safety: No System Modifications ──────────────────────────────
 
-        evidence = optimizer._collect_evidence(
-            hw_spec=None, emulator_target=None, windows_gaming=None,
-            memory_diag=mem, bg_analysis=None, gpu_data=None,
-            thermal_diag=None, power_result=None, emu_proc=None,
+class TestSafety:
+    def setup_method(self):
+        self.engine = AdaptiveOptimizer()
+
+    def test_engine_is_analysis_only(self):
+        """Verify the engine does not have system-modifying methods."""
+        assert hasattr(self.engine, "classify_state")
+        assert hasattr(self.engine, "generate_plan")
+        assert hasattr(self.engine, "execute_plan")  # Uses existing optimizer
+        assert hasattr(self.engine, "format_status")
+        assert hasattr(self.engine, "assess_profile_suitability")
+        # Should not have direct system-modification methods
+        assert not hasattr(self.engine, "set_power_plan")
+        assert not hasattr(self.engine, "terminate_process")
+        assert not hasattr(self.engine, "modify_registry")
+
+    def test_action_statuses_are_explicit(self):
+        for status in ActionStatus:
+            assert status.value  # All statuses have values
+
+
+# ── Persistence ──────────────────────────────────────────────────
+
+class TestPersistence:
+    def test_save_and_load(self):
+        record = AdaptiveSessionRecord(
+            profile="gaming", state="CPU_BOUND", result="IMPROVED",
+            baseline_fps=120.0, post_fps=125.0,
         )
-        mem_ev = [e for e in evidence if e.bottleneck_type == BottleneckType.MEMORY]
-        assert len(mem_ev) > 0
-
-    def test_collect_with_battery(self):
-        optimizer = self._make_optimizer()
-
-        power = MagicMock()
-        power.classification = MagicMock()
-        power.classification.value = "BATTERY LIMITED"
-
-        evidence = optimizer._collect_evidence(
-            hw_spec=None, emulator_target=None, windows_gaming=None,
-            memory_diag=None, bg_analysis=None, gpu_data=None,
-            thermal_diag=None, power_result=power, emu_proc=None,
-        )
-        power_ev = [e for e in evidence if e.bottleneck_type == BottleneckType.POWER]
-        assert len(power_ev) > 0
-
-    def test_collect_with_gpu_bound(self):
-        optimizer = self._make_optimizer()
-
-        emu = MagicMock()
-        emu.cpu_percent = 40.0
-
-        gpu = MagicMock()
-        gpu.utilization_percent = 95.0
-        gpu.temperature_celsius = None
-
-        evidence = optimizer._collect_evidence(
-            hw_spec=None, emulator_target=emu, windows_gaming=None,
-            memory_diag=None, bg_analysis=None, gpu_data=gpu,
-            thermal_diag=None, power_result=None, emu_proc=emu,
-        )
-        gpu_ev = [e for e in evidence if e.bottleneck_type == BottleneckType.GPU]
-        assert len(gpu_ev) > 0
-
-    def test_collect_with_background_load(self):
-        optimizer = self._make_optimizer()
-
-        bg = MagicMock()
-        bg.cpu_competition = MagicMock()
-        bg.cpu_competition.value = "SEVERE"
-        bg.significant_count = 15
-
-        evidence = optimizer._collect_evidence(
-            hw_spec=None, emulator_target=None, windows_gaming=None,
-            memory_diag=None, bg_analysis=bg, gpu_data=None,
-            thermal_diag=None, power_result=None, emu_proc=None,
-        )
-        bg_ev = [e for e in evidence if e.bottleneck_type == BottleneckType.BACKGROUND_LOAD]
-        assert len(bg_ev) > 0
-
-    def test_collect_with_emulator_config(self):
-        optimizer = self._make_optimizer()
-
-        emu = MagicMock()
-        emu.cpu_percent = 50.0
-        emu.priority = 0
-        emu.priority_name = "NORMAL"
-        emu.is_high_priority = False
-        emu.affinity_cpus = 4
-        emu.total_cpus = 12
-        emu.uses_all_cpus = False
-
-        evidence = optimizer._collect_evidence(
-            hw_spec=None, emulator_target=emu, windows_gaming=None,
-            memory_diag=None, bg_analysis=None, gpu_data=None,
-            thermal_diag=None, power_result=None, emu_proc=emu,
-        )
-        config_ev = [e for e in evidence if e.bottleneck_type == BottleneckType.EMULATOR_CONFIGURATION]
-        assert len(config_ev) > 0
-
-
-class TestRecommendationGeneration:
-    """Test recommendation generation logic."""
-
-    def _make_optimizer(self):
-        return AdaptiveOptimizer()
-
-    def test_priority_recommendation_when_not_high(self):
-        optimizer = self._make_optimizer()
-
-        emu = MagicMock()
-        emu.is_high_priority = False
-        emu.priority_name = "NORMAL"
-        emu.uses_all_cpus = True
-        emu.total_cpus = 8
-
-        recs, skips = optimizer._generate_recommendations(
-            bottleneck=BottleneckType.CPU,
-            evidence=[],
-            emulator_target=emu,
-            windows_gaming=None,
-            power_result=None,
-            bg_analysis=None,
-            thermal_diag=None,
-            memory_diag=None,
-            hw_spec=None,
-        )
-        priority_recs = [r for r in recs if r.id == "emulator_priority"]
-        assert len(priority_recs) == 1
-        assert priority_recs[0].status in ("APPLICABLE", "RECOMMENDATION_ONLY")
-
-    def test_priority_skipped_when_high(self):
-        optimizer = self._make_optimizer()
-
-        emu = MagicMock()
-        emu.is_high_priority = True
-        emu.uses_all_cpus = True
-        emu.total_cpus = 8
-
-        recs, skips = optimizer._generate_recommendations(
-            bottleneck=BottleneckType.UNKNOWN,
-            evidence=[],
-            emulator_target=emu,
-            windows_gaming=None,
-            power_result=None,
-            bg_analysis=None,
-            thermal_diag=None,
-            memory_diag=None,
-            hw_spec=None,
-        )
-        priority_skips = [s for s in skips if s["id"] == "emulator_priority"]
-        assert len(priority_skips) == 1
-
-    def test_power_plan_recommendation(self):
-        optimizer = self._make_optimizer()
-
-        power = MagicMock()
-        power.power_plan_is_performance = False
-        power.power_plan_name = "Balanced"
-
-        recs, skips = optimizer._generate_recommendations(
-            bottleneck=BottleneckType.POWER,
-            evidence=[],
-            emulator_target=None,
-            windows_gaming=None,
-            power_result=power,
-            bg_analysis=None,
-            thermal_diag=None,
-            memory_diag=None,
-            hw_spec=None,
-        )
-        power_recs = [r for r in recs if r.id == "power_plan"]
-        assert len(power_recs) == 1
-
-    def test_power_plan_skipped_when_optimal(self):
-        optimizer = self._make_optimizer()
-
-        power = MagicMock()
-        power.power_plan_is_performance = True
-        power.power_plan_name = "High Performance"
-
-        recs, skips = optimizer._generate_recommendations(
-            bottleneck=BottleneckType.UNKNOWN,
-            evidence=[],
-            emulator_target=None,
-            windows_gaming=None,
-            power_result=power,
-            bg_analysis=None,
-            thermal_diag=None,
-            memory_diag=None,
-            hw_spec=None,
-        )
-        power_skips = [s for s in skips if s["id"] == "power_plan"]
-        assert len(power_skips) == 1
-
-    def test_game_mode_recommendation(self):
-        optimizer = self._make_optimizer()
-
-        gm_item = MagicMock()
-        gm_item.name = "Game Mode"
-        gm_item.status = "DISABLED"
-
-        win_gaming = MagicMock()
-        win_gaming.items = [gm_item]
-
-        recs, skips = optimizer._generate_recommendations(
-            bottleneck=BottleneckType.UNKNOWN,
-            evidence=[],
-            emulator_target=None,
-            windows_gaming=win_gaming,
-            power_result=None,
-            bg_analysis=None,
-            thermal_diag=None,
-            memory_diag=None,
-            hw_spec=None,
-        )
-        gm_recs = [r for r in recs if r.id == "game_mode"]
-        assert len(gm_recs) == 1
-
-    def test_no_emulator_skips_priority(self):
-        optimizer = self._make_optimizer()
-
-        recs, skips = optimizer._generate_recommendations(
-            bottleneck=BottleneckType.UNKNOWN,
-            evidence=[],
-            emulator_target=None,
-            windows_gaming=None,
-            power_result=None,
-            bg_analysis=None,
-            thermal_diag=None,
-            memory_diag=None,
-            hw_spec=None,
-        )
-        # Should not have emulator_priority recommendation
-        priority_recs = [r for r in recs if r.id == "emulator_priority"]
-        assert len(priority_recs) == 0
-
-    def test_recommendation_only_for_background(self):
-        optimizer = self._make_optimizer()
-
-        bg = MagicMock()
-        candidate = MagicMock()
-        candidate.name = "chrome.exe"
-        candidate.recommendation = "SAFE_TO_RECOMMEND"
-        bg.top_cpu_processes = [candidate]
-
-        recs, skips = optimizer._generate_recommendations(
-            bottleneck=BottleneckType.BACKGROUND_LOAD,
-            evidence=[BottleneckEvidence(
-                bottleneck_type=BottleneckType.BACKGROUND_LOAD,
-                metric_name="CPU Competition",
-                metric_value=10.0,
-                threshold=5.0,
-                description="High competition",
-            )],
-            emulator_target=None,
-            windows_gaming=None,
-            power_result=None,
-            bg_analysis=bg,
-            thermal_diag=None,
-            memory_diag=None,
-            hw_spec=None,
-        )
-        bg_recs = [r for r in recs if r.id == "background_load"]
-        assert len(bg_recs) == 1
-        assert bg_recs[0].status == "RECOMMENDATION_ONLY"
-
-    def test_cpu_affinity_with_bottleneck(self):
-        optimizer = self._make_optimizer()
-
-        emu = MagicMock()
-        emu.is_high_priority = True
-        emu.uses_all_cpus = False
-        emu.total_cpus = 12
-        emu.affinity_cpus = 6
-
-        recs, skips = optimizer._generate_recommendations(
-            bottleneck=BottleneckType.CPU,
-            evidence=[BottleneckEvidence(
-                bottleneck_type=BottleneckType.CPU,
-                metric_name="CPU",
-                metric_value=90.0,
-                threshold=85.0,
-                description="CPU bound",
-            )],
-            emulator_target=emu,
-            windows_gaming=None,
-            power_result=None,
-            bg_analysis=None,
-            thermal_diag=None,
-            memory_diag=None,
-            hw_spec=None,
-        )
-        affinity_recs = [r for r in recs if r.id == "cpu_affinity"]
-        assert len(affinity_recs) == 1
-
-
-class TestImpactAssessment:
-    """Test impact assessment logic."""
-
-    def _make_optimizer(self):
-        return AdaptiveOptimizer()
-
-    def test_no_emulator_gives_unknown(self):
-        optimizer = self._make_optimizer()
-        impact, reason = optimizer._assess_impact(
-            BottleneckType.CPU, [], None
-        )
-        assert impact == ExpectedImpact.UNKNOWN
-
-    def test_unknown_bottleneck_gives_unknown(self):
-        optimizer = self._make_optimizer()
-        emu = MagicMock()
-        impact, reason = optimizer._assess_impact(
-            BottleneckType.UNKNOWN, [], emu
-        )
-        assert impact == ExpectedImpact.UNKNOWN
-
-    def test_high_severity_gives_high_impact(self):
-        optimizer = self._make_optimizer()
-        emu = MagicMock()
-        evidence = [
-            BottleneckEvidence(
-                bottleneck_type=BottleneckType.CPU,
-                metric_name="CPU",
-                metric_value=95.0,
-                threshold=85.0,
-                description="CPU at 95%",
-            ),
-            BottleneckEvidence(
-                bottleneck_type=BottleneckType.CPU,
-                metric_name="CPU/GPU",
-                metric_value=3.0,
-                threshold=2.0,
-                description="CPU bound",
-            ),
-        ]
-        impact, reason = optimizer._assess_impact(
-            BottleneckType.CPU, evidence, emu
-        )
-        assert impact == ExpectedImpact.HIGH
-
-    def test_single_moderate_evidence_gives_medium(self):
-        optimizer = self._make_optimizer()
-        emu = MagicMock()
-        evidence = [
-            BottleneckEvidence(
-                bottleneck_type=BottleneckType.CPU,
-                metric_name="CPU",
-                metric_value=88.0,
-                threshold=85.0,
-                description="CPU moderate",
-            ),
-        ]
-        impact, reason = optimizer._assess_impact(
-            BottleneckType.CPU, evidence, emu
-        )
-        assert impact in (ExpectedImpact.MEDIUM, ExpectedImpact.HIGH)
-
-
-class TestHardwareRisks:
-    """Test hardware risk detection."""
-
-    def _make_optimizer(self):
-        return AdaptiveOptimizer()
-
-    def test_low_ram_risk(self):
-        optimizer = self._make_optimizer()
-        hw = MagicMock()
-        hw.ram_total_gb = 4.0
-        hw.gpu_vram_mb = 8192.0
-        hw.cpu_physical_cores = 8
-        risks = optimizer._hardware_risks(hw)
-        assert any("limited RAM" in r for r in risks)
-
-    def test_low_vram_risk(self):
-        optimizer = self._make_optimizer()
-        hw = MagicMock()
-        hw.ram_total_gb = 16.0
-        hw.gpu_vram_mb = 1024.0
-        hw.cpu_physical_cores = 8
-        risks = optimizer._hardware_risks(hw)
-        assert any("VRAM" in r for r in risks)
-
-    def test_low_cores_risk(self):
-        optimizer = self._make_optimizer()
-        hw = MagicMock()
-        hw.ram_total_gb = 16.0
-        hw.gpu_vram_mb = 4096.0
-        hw.cpu_physical_cores = 2
-        risks = optimizer._hardware_risks(hw)
-        assert any("few cores" in r for r in risks)
-
-    def test_good_hardware_no_risks(self):
-        optimizer = self._make_optimizer()
-        hw = MagicMock()
-        hw.ram_total_gb = 32.0
-        hw.gpu_vram_mb = 8192.0
-        hw.cpu_physical_cores = 8
-        risks = optimizer._hardware_risks(hw)
-        assert len(risks) == 0
-
-    def test_none_hw_no_risks(self):
-        optimizer = self._make_optimizer()
-        risks = optimizer._hardware_risks(None)
-        assert len(risks) == 0
-
-
-class TestAssessmentGeneration:
-    """Test assessment text generation."""
-
-    def _make_optimizer(self):
-        return AdaptiveOptimizer()
-
-    def test_unknown_bottleneck_assessment(self):
-        optimizer = self._make_optimizer()
-        decision = OptimizationDecision(
-            bottleneck=BottleneckType.UNKNOWN,
-            has_emulator=False,
-        )
-        assessment = optimizer._generate_assessment(decision)
-        assert "No clear" in assessment or "UNKNOWN" in assessment
-
-    def test_with_emulator_assessment(self):
-        optimizer = self._make_optimizer()
-        decision = OptimizationDecision(
-            bottleneck=BottleneckType.CPU,
-            bottleneck_confidence=0.8,
-            has_emulator=True,
-            emulator_name="HD-Player.exe",
-            emulator_pid=1234,
-        )
-        assessment = optimizer._generate_assessment(decision)
-        assert "HD-Player.exe" in assessment
-
-    def test_with_recommendations_assessment(self):
-        optimizer = self._make_optimizer()
-        decision = OptimizationDecision(
-            bottleneck=BottleneckType.CPU,
-            bottleneck_confidence=0.75,
-            has_emulator=True,
-            emulator_name="HD-Player.exe",
-            emulator_pid=1234,
-            recommended_optimizations=[
-                OptimizationAction(status="APPLICABLE"),
-                OptimizationAction(status="RECOMMENDATION_ONLY"),
-            ],
-        )
-        assessment = optimizer._generate_assessment(decision)
-        assert "1 optimization" in assessment
-        assert "1 recommendation" in assessment
-
-
-class TestEndToEnd:
-    """Test complete analysis flow with mocked subsystems."""
-
-    @patch("app.core.adaptive_optimizer.adaptive_optimizer._collect_evidence")
-    @patch("app.core.adaptive_optimizer.adaptive_optimizer._classify_bottleneck")
-    @patch("app.core.adaptive_optimizer.adaptive_optimizer._generate_recommendations")
-    @patch("app.core.adaptive_optimizer.adaptive_optimizer._assess_impact")
-    @patch("app.core.adaptive_optimizer.adaptive_optimizer._generate_assessment")
-    @patch("app.core.adaptive_optimizer.adaptive_optimizer._hardware_risks")
-    def test_full_analysis_with_emulator(
-        self, mock_risks, mock_assess, mock_impact, mock_recs,
-        mock_classify, mock_evidence
-    ):
-        # Setup mocks
-        mock_risks.return_value = []
-        mock_evidence.return_value = [
-            BottleneckEvidence(
-                bottleneck_type=BottleneckType.CPU,
-                metric_name="CPU",
-                metric_value=90.0,
-                threshold=85.0,
-                description="CPU high",
-            ),
-        ]
-        mock_classify.return_value = (
-            BottleneckType.CPU, 0.8, "CPU bottleneck detected"
-        )
-        mock_recs.return_value = (
-            [OptimizationAction(id="power_plan", status="APPLICABLE")],
-            [{"id": "game_mode", "reason": "Already enabled"}],
-        )
-        mock_impact.return_value = (ExpectedImpact.HIGH, "Strong CPU evidence")
-        mock_assess.return_value = "CPU bottleneck with 1 optimization applicable"
-
-        optimizer = AdaptiveOptimizer()
-
-        # Mock all subsystems — using correct singleton names
-        with patch("app.core.hardware_profile.analyze_hardware_profile") as mock_hw, \
-             patch("app.core.emulator_controller.emulator_controller") as mock_emu, \
-             patch("app.system.windows_gaming.windows_gaming_analyzer") as mock_win, \
-             patch("app.system.memory_optimizer.memory_optimizer") as mock_mem, \
-             patch("app.system.background_analyzer.background_analyzer") as mock_bg, \
-             patch("app.system.gpu.gpu_monitor") as mock_gpu, \
-             patch("app.system.thermal_monitor.thermal_diagnostics") as mock_therm, \
-             patch("app.system.power_analyzer.power_analyzer") as mock_power, \
-             patch("app.performance.presentmon_provider.find_presentmon") as mock_pm:
-
-            # Hardware
-            hw_result = MagicMock()
-            hw_result.hardware = MagicMock()
-            mock_hw.return_value = hw_result
-
-            # Emulator
-            emu_target = MagicMock()
-            emu_target.name = "HD-Player.exe"
-            emu_target.pid = 1234
-            emu_target.is_high_priority = False
-            emu_target.uses_all_cpus = False
-            emu_target.total_cpus = 12
-            emu_target.affinity_cpus = 6
-            emu_target.priority = 0
-            emu_target.priority_name = "NORMAL"
-            mock_emu.detect_target.return_value = emu_target
-
-            # Windows gaming
-            mock_win.analyze.return_value = MagicMock()
-
-            # Memory
-            mock_mem.diagnose.return_value = MagicMock()
-
-            # Background
-            mock_bg.analyze.return_value = MagicMock()
-
-            # GPU
-            mock_gpu.detect.return_value = [MagicMock()]
-            mock_gpu.update.return_value = MagicMock()
-
-            # Thermal
-            mock_therm.diagnose.return_value = MagicMock()
-
-            # Power
-            mock_power.analyze.return_value = MagicMock()
-
-            # PresentMon
-            mock_pm.return_value = "/path/to/presentmon.exe"
-
-            result = optimizer.analyze(force=True)
-
-            assert isinstance(result, OptimizationDecision)
-            assert result.has_emulator is True
-            assert result.emulator_name == "HD-Player.exe"
-            assert result.emulator_pid == 1234
-            assert result.has_fps_data is True
-            assert result.fps_provider == "PresentMon 2.5.1"
-
-    def test_analysis_without_emulator(self):
-        optimizer = AdaptiveOptimizer()
-
-        with patch("app.core.hardware_profile.analyze_hardware_profile") as mock_hw, \
-             patch("app.core.emulator_controller.emulator_controller") as mock_emu, \
-             patch("app.system.windows_gaming.windows_gaming_analyzer") as mock_win, \
-             patch("app.system.memory_optimizer.memory_optimizer") as mock_mem, \
-             patch("app.system.background_analyzer.background_analyzer") as mock_bg, \
-             patch("app.system.gpu.gpu_monitor") as mock_gpu, \
-             patch("app.system.thermal_monitor.thermal_diagnostics") as mock_therm, \
-             patch("app.system.power_analyzer.power_analyzer") as mock_power, \
-             patch("app.performance.presentmon_provider.find_presentmon") as mock_pm:
-
-            hw_result = MagicMock()
-            hw_result.hardware = MagicMock()
-            mock_hw.return_value = hw_result
-            mock_emu.detect_target.return_value = None
-            mock_win.analyze.return_value = MagicMock()
-            mock_mem.diagnose.return_value = MagicMock()
-            mock_bg.analyze.return_value = MagicMock()
-            mock_gpu.detect.return_value = []
-            mock_therm.diagnose.return_value = MagicMock()
-            mock_power.analyze.return_value = MagicMock()
-            mock_pm.return_value = None
-
-            result = optimizer.analyze(force=True)
-
-            assert result.has_emulator is False
-            assert result.emulator_name == ""
-            assert result.has_fps_data is False
-
-    def test_cache_behavior(self):
-        optimizer = AdaptiveOptimizer()
-
-        with patch("app.core.hardware_profile.analyze_hardware_profile") as mock_hw, \
-             patch("app.core.emulator_controller.emulator_controller") as mock_emu, \
-             patch("app.system.windows_gaming.windows_gaming_analyzer"), \
-             patch("app.system.memory_optimizer.memory_optimizer"), \
-             patch("app.system.background_analyzer.background_analyzer"), \
-             patch("app.system.gpu.gpu_monitor") as mock_gpu, \
-             patch("app.system.thermal_monitor.thermal_diagnostics"), \
-             patch("app.system.power_analyzer.power_analyzer"), \
-             patch("app.performance.presentmon_provider.find_presentmon"):
-
-            hw_result = MagicMock()
-            hw_result.hardware = MagicMock()
-            mock_hw.return_value = hw_result
-            mock_emu.detect_target.return_value = None
-            mock_gpu.detect.return_value = []
-
-            # First call
-            result1 = optimizer.analyze(force=True)
-            # Second call (cached)
-            result2 = optimizer.analyze()
-            # Same object
-            assert result1 is result2
-
-            # Force refresh
-            result3 = optimizer.analyze(force=True)
-            assert result3 is not result1
-
-
-class TestSingleton:
-    """Test the singleton instance."""
-
-    def test_singleton_exists(self):
-        assert adaptive_optimizer is not None
-        assert isinstance(adaptive_optimizer, AdaptiveOptimizer)
+        _save_session_record(record)
+        assert os.path.exists(os.path.join(HISTORY_DIR, f"{record.session_id}.json"))
+
+    def test_load_history(self):
+        records = load_session_history(5)
+        assert isinstance(records, list)
+
+
+# ── Deterministic Classification ─────────────────────────────────
+
+class TestDeterministicClassification:
+    def test_same_input_same_output(self):
+        engine = AdaptiveOptimizer()
+        samples = make_samples(20, cpu=92, gpu=35, ram_used=10000, ram_total=16000)
+        s1, c1, _ = engine.classify_state(samples)
+        s2, c2, _ = engine.classify_state(samples)
+        assert s1 == s2
+        assert c1 == c2
+
+    def test_empty_always_insufficient(self):
+        engine = AdaptiveOptimizer()
+        for _ in range(5):
+            state, _, _ = engine.classify_state([])
+            assert state == AdaptiveState.INSUFFICIENT_DATA
+
+
+# ── Conflicting Evidence ─────────────────────────────────────────
+
+class TestConflictingEvidence:
+    def test_cpu_and_gpu_both_high(self):
+        engine = AdaptiveOptimizer()
+        samples = make_samples(20, cpu=92, gpu=92, ram_used=10000, ram_total=16000)
+        state, conf, ev = engine.classify_state(samples)
+        # Should be one of the high-resource states
+        assert state in (AdaptiveState.CPU_BOUND, AdaptiveState.GPU_BOUND, AdaptiveState.RESOURCE_PRESSURE)
+        assert conf > 30

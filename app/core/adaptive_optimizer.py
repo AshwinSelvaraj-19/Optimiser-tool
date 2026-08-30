@@ -1,818 +1,1060 @@
 """
-Adaptive Gaming Optimizer — Phase 25
+Adaptive Gaming Optimization & Profile Intelligence — Phase 36.
 
-Analyzes the complete system state and determines what actually needs optimization.
-Uses all existing subsystems instead of duplicating them.
+Determines the user's current gaming situation and selects the safest useful
+optimization actions based on measured evidence.
 
-Pipeline:
-  1. Detect hardware
-  2. Detect emulator
-  3. Read Windows gaming state
-  4. Read memory pressure
-  5. Read background load
-  6. Read GPU state
-  7. Read thermal state
-  8. Read power state
-  9. Read emulator configuration
-  10. Read PresentMon frame telemetry
-  11. Identify bottleneck
-  12. Recommend only relevant actions
+Reuses existing: optimizer, recommendation_engine, telemetry, profiles,
+emulator detection, session management, snapshot/rollback infrastructure.
 
-IMPORTANT:
-- Do NOT apply everything blindly
-- Do NOT fabricate bottleneck claims
-- Do NOT predict FPS improvements
-- Every recommendation must have evidence
-- All values originate from real subsystems
+STRICTLY evidence-based. Never modifies system state directly.
 """
 
+import json
+import os
+import statistics
+import threading
 import time
+import uuid
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Tuple
+from datetime import datetime
 from enum import Enum
+from typing import Dict, List, Optional, Tuple
 
+from app.performance.telemetry_models import (
+    BottleneckType,
+    TelemetrySample,
+)
+from app.core.recommendation_engine import (
+    DataQuality,
+    EvidencePoint,
+    RecommendationEngine,
+    RecommendationPriority,
+    RecommendationSession,
+)
 from app.utils.logger import get_logger
 
 logger = get_logger("core.adaptive_optimizer")
 
 
-# ── Bottleneck Classification ─────────────────────────────────
+# ── Enums ────────────────────────────────────────────────────────
 
-class BottleneckType(Enum):
-    """Detected performance bottleneck type."""
-    CPU = "CPU"
-    GPU = "GPU"
-    MEMORY = "MEMORY"
-    THERMAL = "THERMAL"
-    POWER = "POWER"
-    FRAME_PACING = "FRAME PACING"
-    BACKGROUND_LOAD = "BACKGROUND LOAD"
-    DISPLAY = "DISPLAY"
-    EMULATOR_CONFIGURATION = "EMULATOR CONFIGURATION"
+class AdaptiveState(Enum):
+    """Current gaming condition classification."""
+    OPTIMAL = "OPTIMAL"
+    CPU_BOUND = "CPU_BOUND"
+    GPU_BOUND = "GPU_BOUND"
+    MEMORY_BOUND = "MEMORY_BOUND"
+    THERMAL_LIMITED = "THERMAL_LIMITED"
+    FRAME_TIME_UNSTABLE = "FRAME_TIME_UNSTABLE"
+    RESOURCE_PRESSURE = "RESOURCE_PRESSURE"
+    INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
+
+
+class ActionStatus(Enum):
+    """Result of applying an adaptive action."""
+    APPLIED = "APPLIED"
+    ALREADY_OPTIMAL = "ALREADY_OPTIMAL"
+    REQUIRES_ADMIN = "REQUIRES_ADMIN"
+    NOT_AVAILABLE = "NOT_AVAILABLE"
+    RECOMMENDATION_ONLY = "RECOMMENDATION_ONLY"
+    BLOCKED_BY_SAFETY = "BLOCKED_BY_SAFETY"
+    FAILED = "FAILED"
+    SKIPPED_INSUFFICIENT_EVIDENCE = "SKIPPED_INSUFFICIENT_EVIDENCE"
+    SKIPPED_NOT_IN_PROFILE = "SKIPPED_NOT_IN_PROFILE"
+
+
+class ProfileSuitability(Enum):
+    """How suitable a profile is for the current situation."""
+    SUITABLE = "SUITABLE"
+    MARGINAL = "MARGINAL"
+    UNSUITABLE = "UNSUITABLE"
     UNKNOWN = "UNKNOWN"
 
 
-class ExpectedImpact(Enum):
-    """Expected impact category for the optimization."""
-    HIGH = "HIGH"
-    MEDIUM = "MEDIUM"
-    LOW = "LOW"
-    UNKNOWN = "UNKNOWN"
+class SessionResult(Enum):
+    """Overall adaptive session result."""
+    IMPROVED = "IMPROVED"
+    DEGRADED = "DEGRADED"
+    UNCHANGED = "UNCHANGED"
+    INCONCLUSIVE = "INCONCLUSIVE"
+    NO_EMULATOR = "NO_EMULATOR"
+    CANCELLED = "CANCELLED"
 
 
-# ── Data Models ───────────────────────────────────────────────
+# ── Models ───────────────────────────────────────────────────────
 
 @dataclass
-class OptimizationAction:
-    """A single recommended optimization action."""
-    id: str = ""
-    name: str = ""
-    description: str = ""
+class AdaptiveAction:
+    """A single recommended action in the adaptive plan."""
+    optimization_id: str = ""
+    optimization_name: str = ""
+    status: ActionStatus = ActionStatus.SKIPPED_INSUFFICIENT_EVIDENCE
+    confidence: int = 0
     reason: str = ""
-    evidence: str = ""
-    source_subsystem: str = ""
-    status: str = ""  # APPLICABLE, ALREADY_OPTIMAL, REQUIRES_ADMIN, RECOMMENDATION_ONLY, NOT_APPLICABLE
-    risk: str = "LOW"  # LOW, MEDIUM, HIGH
-    expected_impact: str = "UNKNOWN"
+    evidence: List[EvidencePoint] = field(default_factory=list)
+    expected_area: str = ""
+    safety: str = ""
+    rollback_available: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "optimization_id": self.optimization_id,
+            "optimization_name": self.optimization_name,
+            "status": self.status.value,
+            "confidence": self.confidence,
+            "reason": self.reason,
+            "expected_area": self.expected_area,
+            "safety": self.safety,
+            "rollback_available": self.rollback_available,
+        }
 
 
 @dataclass
-class BottleneckEvidence:
-    """Evidence supporting a bottleneck classification."""
-    bottleneck_type: BottleneckType = BottleneckType.UNKNOWN
-    metric_name: str = ""
-    metric_value: float = 0.0
-    threshold: float = 0.0
-    source: str = ""
-    description: str = ""
+class AdaptivePlan:
+    """Structured action plan for adaptive optimization."""
+    plan_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    timestamp: float = field(default_factory=time.time)
+    target_name: str = ""
+    target_pid: int = 0
+    state: AdaptiveState = AdaptiveState.INSUFFICIENT_DATA
+    confidence: int = 0
+    recommended_profile: str = "gaming"
+    actions: List[AdaptiveAction] = field(default_factory=list)
+    sample_count: int = 0
+    duration_seconds: float = 0.0
+
+    def get_applicable_actions(self) -> List[AdaptiveAction]:
+        """Get actions that can be applied (not blocked/skipped)."""
+        return [
+            a for a in self.actions
+            if a.status in (ActionStatus.APPLIED, ActionStatus.ALREADY_OPTIMAL,
+                           ActionStatus.REQUIRES_ADMIN, ActionStatus.FAILED)
+        ]
+
+    def to_dict(self) -> dict:
+        return {
+            "plan_id": self.plan_id,
+            "timestamp": self.timestamp,
+            "target_name": self.target_name,
+            "target_pid": self.target_pid,
+            "state": self.state.value,
+            "confidence": self.confidence,
+            "recommended_profile": self.recommended_profile,
+            "actions": [a.to_dict() for a in self.actions],
+            "sample_count": self.sample_count,
+        }
 
 
 @dataclass
-class OptimizationDecision:
-    """
-    Complete adaptive optimization analysis result.
-    Contains bottleneck identification, evidence, and targeted recommendations.
-    """
-    # Primary bottleneck
-    bottleneck: BottleneckType = BottleneckType.UNKNOWN
-    bottleneck_confidence: float = 0.0
-    bottleneck_description: str = ""
+class ProfileSuitabilityResult:
+    """Assessment of how suitable a profile is for the current state."""
+    profile_id: str = ""
+    suitability: ProfileSuitability = ProfileSuitability.UNKNOWN
+    reason: str = ""
+    evidence: List[str] = field(default_factory=list)
 
-    # Evidence chain
-    evidence: List[BottleneckEvidence] = field(default_factory=list)
-
-    # Recommended optimizations (only relevant ones)
-    recommended_optimizations: List[OptimizationAction] = field(default_factory=list)
-
-    # Skipped optimizations (with reason)
-    skipped_optimizations: List[Dict] = field(default_factory=list)
-
-    # Risks
-    risks: List[str] = field(default_factory=list)
-
-    # Expected impact
-    expected_impact: ExpectedImpact = ExpectedImpact.UNKNOWN
-    impact_reason: str = ""
-
-    # System snapshot
-    has_emulator: bool = False
-    emulator_name: str = ""
-    emulator_pid: int = 0
-
-    # Telemetry source
-    has_fps_data: bool = False
-    fps_provider: str = ""
-
-    # Overall assessment
-    overall_assessment: str = ""
-
-    # Timestamp
-    timestamp: float = 0.0
-
-    def __post_init__(self):
-        if self.timestamp == 0.0:
-            self.timestamp = time.time()
+    def to_dict(self) -> dict:
+        return {
+            "profile_id": self.profile_id,
+            "suitability": self.suitability.value,
+            "reason": self.reason,
+            "evidence": self.evidence,
+        }
 
 
-# ── Adaptive Optimizer Engine ─────────────────────────────────
+@dataclass
+class AdaptiveSessionRecord:
+    """Historical record of an adaptive optimization session."""
+    session_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    timestamp: float = field(default_factory=time.time)
+    target_name: str = ""
+    target_pid: int = 0
+    profile: str = ""
+    state: str = ""
+    confidence: int = 0
+    actions_attempted: int = 0
+    actions_applied: int = 0
+    actions_optimal: int = 0
+    actions_failed: int = 0
+    baseline_fps: Optional[float] = None
+    baseline_1low: Optional[float] = None
+    baseline_frame_time: Optional[float] = None
+    post_fps: Optional[float] = None
+    post_1low: Optional[float] = None
+    post_frame_time: Optional[float] = None
+    result: str = ""
+    restoration_status: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "session_id": self.session_id,
+            "timestamp": self.timestamp,
+            "target_name": self.target_name,
+            "profile": self.profile,
+            "state": self.state,
+            "confidence": self.confidence,
+            "actions_attempted": self.actions_attempted,
+            "actions_applied": self.actions_applied,
+            "result": self.result,
+            "baseline_fps": self.baseline_fps,
+            "post_fps": self.post_fps,
+        }
+
+
+# ── Persistence ──────────────────────────────────────────────────
+
+HISTORY_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "adaptive_sessions",
+)
+MAX_HISTORY = 100
+
+
+def _ensure_history_dir():
+    os.makedirs(HISTORY_DIR, exist_ok=True)
+
+
+def _save_session_record(record: AdaptiveSessionRecord):
+    """Save a session record to disk."""
+    try:
+        _ensure_history_dir()
+        filepath = os.path.join(HISTORY_DIR, f"{record.session_id}.json")
+        with open(filepath, "w") as f:
+            json.dump(record.to_dict(), f, indent=2)
+    except Exception as e:
+        logger.debug(f"Failed to save session record: {e}")
+
+
+def load_session_history(count: int = 20) -> List[AdaptiveSessionRecord]:
+    """Load recent session history from disk."""
+    try:
+        _ensure_history_dir()
+        files = sorted(
+            [f for f in os.listdir(HISTORY_DIR) if f.endswith(".json")],
+            key=lambda f: os.path.getmtime(os.path.join(HISTORY_DIR, f)),
+            reverse=True,
+        )
+        records = []
+        for fname in files[:count]:
+            try:
+                with open(os.path.join(HISTORY_DIR, fname)) as f:
+                    data = json.load(f)
+                records.append(AdaptiveSessionRecord(**{
+                    k: v for k, v in data.items()
+                    if k in AdaptiveSessionRecord.__dataclass_fields__
+                }))
+            except Exception:
+                continue
+        return records
+    except Exception:
+        return []
+
+
+# ── Constants ────────────────────────────────────────────────────
+
+# Persistence requirements for bottleneck classification
+MIN_SAMPLES_CLASSIFY = 5
+MIN_SAMPLES_HIGH_CONFIDENCE = 20
+
+# Thresholds for state classification (from telemetry samples)
+CPU_HIGH_THRESHOLD = 85.0
+CPU_ELEVATED_THRESHOLD = 70.0
+GPU_SATURATION_THRESHOLD = 90.0
+GPU_ELEVATED_THRESHOLD = 75.0
+RAM_PRESSURE_HIGH = 85.0
+RAM_PRESSURE_ELEVATED = 75.0
+THERMAL_WARNING = 85.0
+THERMAL_CRITICAL = 90.0
+FRAME_TIME_CV_UNSTABLE = 0.35
+FRAME_TIME_CV_MILD = 0.20
+
+# Profile → optimization mapping
+PROFILE_OPT_IDS = {
+    "balanced": {"game_mode"},
+    "gaming": {"power_plan", "game_mode", "emulator_priority", "memory_analysis"},
+    "max_performance": {
+        "power_plan", "game_mode", "game_bar", "background_recording",
+        "emulator_priority", "cpu_affinity", "memory_analysis", "background_load",
+    },
+}
+
+
+# ── Engine ───────────────────────────────────────────────────────
 
 class AdaptiveOptimizer:
     """
-    Analyzes the complete system state and produces an evidence-based
-    optimization decision. Uses all existing subsystems.
+    Adaptive gaming optimization engine.
+
+    Evaluates the current gaming situation, determines what actually needs
+    optimization, and generates evidence-based action plans.
+
+    Uses existing infrastructure for actual system modifications.
     """
 
     def __init__(self):
-        self._cache: Optional[OptimizationDecision] = None
-        self._cache_time: float = 0.0
-        self._cache_ttl: float = 15.0  # 15s cache
+        self._recommendation_engine = RecommendationEngine()
+        self._lock = threading.Lock()
+        self._last_plan: Optional[AdaptivePlan] = None
+        self._history: List[AdaptiveSessionRecord] = []
 
-    def analyze(self, force: bool = False) -> OptimizationDecision:
+    @property
+    def last_plan(self) -> Optional[AdaptivePlan]:
+        return self._last_plan
+
+    @property
+    def history(self) -> List[AdaptiveSessionRecord]:
+        if not self._history:
+            self._history = load_session_history()
+        return list(self._history)
+
+    # ── State Classification ──────────────────────────────────
+
+    def classify_state(
+        self, samples: List[TelemetrySample]
+    ) -> Tuple[AdaptiveState, int, List[str]]:
         """
-        Run the full adaptive analysis pipeline.
-        Returns an OptimizationDecision with evidence-based recommendations.
+        Classify the current gaming condition from telemetry samples.
+
+        Returns:
+            (state, confidence, evidence)
         """
-        now = time.time()
-        if not force and self._cache and (now - self._cache_time) < self._cache_ttl:
-            return self._cache
-
-        decision = OptimizationDecision(timestamp=now)
-        evidence_collector = []
-
-        # ── Step 1: Detect hardware ──
-        hw_spec = None
-        try:
-            from app.core.hardware_profile import analyze_hardware_profile
-            hw_result = analyze_hardware_profile()
-            hw_spec = hw_result.hardware
-            decision.risks.extend(self._hardware_risks(hw_spec))
-        except Exception as e:
-            logger.debug(f"Hardware detection: {e}")
-
-        # ── Step 2: Detect emulator ──
-        emulator_target = None
-        try:
-            from app.core.emulator_controller import emulator_controller
-            emulator_target = emulator_controller.detect_target()
-            if emulator_target:
-                decision.has_emulator = True
-                decision.emulator_name = emulator_target.name
-                decision.emulator_pid = emulator_target.pid
-        except Exception as e:
-            logger.debug(f"Emulator detection: {e}")
-
-        # ── Step 3: Read Windows gaming state ──
-        windows_gaming = None
-        try:
-            from app.system.windows_gaming import windows_gaming_analyzer
-            target_name = emulator_target.name if emulator_target else ""
-            target_pid = emulator_target.pid if emulator_target else 0
-            windows_gaming = windows_gaming_analyzer.analyze(target_name, target_pid)
-        except Exception as e:
-            logger.debug(f"Windows gaming: {e}")
-
-        # ── Step 4: Read memory pressure ──
-        memory_diag = None
-        try:
-            from app.system.memory_optimizer import memory_optimizer
-            memory_diag = memory_optimizer.diagnose()
-        except Exception as e:
-            logger.debug(f"Memory diagnostics: {e}")
-
-        # ── Step 5: Read background load ──
-        bg_analysis = None
-        try:
-            from app.system.background_analyzer import background_analyzer
-            e_pid = emulator_target.pid if emulator_target else 0
-            e_name = emulator_target.name if emulator_target else ""
-            bg_analysis = background_analyzer.analyze(
-                emulator_pid=e_pid, emulator_name=e_name
-            )
-        except Exception as e:
-            logger.debug(f"Background analysis: {e}")
-
-        # ── Step 6: Read GPU state ──
-        gpu_data = None
-        try:
-            from app.system.gpu import gpu_monitor
-            gpus = gpu_monitor.detect()
-            if gpus:
-                gpu_data = gpu_monitor.update(gpus[0])
-        except Exception as e:
-            logger.debug(f"GPU state: {e}")
-
-        # ── Step 7: Read thermal state ──
-        thermal_diag = None
-        try:
-            from app.system.thermal_monitor import thermal_diagnostics
-            thermal_diag = thermal_diagnostics.diagnose()
-        except Exception as e:
-            logger.debug(f"Thermal state: {e}")
-
-        # ── Step 8: Read power state ──
-        power_result = None
-        try:
-            from app.system.power_analyzer import power_analyzer
-            power_result = power_analyzer.analyze()
-        except Exception as e:
-            logger.debug(f"Power state: {e}")
-
-        # ── Step 9: Read emulator process state ──
-        emu_proc = None
-        if emulator_target:
-            try:
-                from app.core.resource_analyzer import EmulatorProcessAnalyzer
-                emu_analyzer = EmulatorProcessAnalyzer()
-                emu_proc = emu_analyzer.analyze(emulator_target.pid, emulator_target.name)
-            except Exception as e:
-                logger.debug(f"Emulator process analysis: {e}")
-
-        # ── Step 10: Read frame telemetry (PresentMon) ──
-        frame_pacing = None
-        try:
-            from app.performance.presentmon_provider import find_presentmon
-            pm_path = find_presentmon()
-            if pm_path:
-                decision.has_fps_data = True
-                decision.fps_provider = "PresentMon 2.5.1"
-        except Exception as e:
-            logger.debug(f"PresentMon detection: {e}")
-
-        # ── Step 11: Classify bottleneck from evidence ──
-        evidence_collector = self._collect_evidence(
-            hw_spec, emulator_target, windows_gaming, memory_diag,
-            bg_analysis, gpu_data, thermal_diag, power_result, emu_proc,
-        )
-        decision.evidence = evidence_collector
-        decision.bottleneck, decision.bottleneck_confidence, decision.bottleneck_description = \
-            self._classify_bottleneck(evidence_collector)
-
-        # ── Step 12: Generate targeted recommendations ──
-        decision.recommended_optimizations, decision.skipped_optimizations = \
-            self._generate_recommendations(
-                decision.bottleneck, evidence_collector,
-                emulator_target, windows_gaming, power_result,
-                bg_analysis, thermal_diag, memory_diag, hw_spec,
+        if not samples or len(samples) < MIN_SAMPLES_CLASSIFY:
+            return (
+                AdaptiveState.INSUFFICIENT_DATA,
+                0,
+                [f"Only {len(samples) if samples else 0} samples, "
+                 f"need {MIN_SAMPLES_CLASSIFY} minimum"],
             )
 
-        # ── Impact assessment ──
-        decision.expected_impact, decision.impact_reason = self._assess_impact(
-            decision.bottleneck, evidence_collector, emulator_target
-        )
-
-        # ── Overall assessment ──
-        decision.overall_assessment = self._generate_assessment(decision)
-
-        self._cache = decision
-        self._cache_time = now
-        return decision
-
-    # ── Evidence Collection ────────────────────────────────────
-
-    def _collect_evidence(
-        self, hw_spec, emulator_target, windows_gaming, memory_diag,
-        bg_analysis, gpu_data, thermal_diag, power_result, emu_proc,
-    ) -> List[BottleneckEvidence]:
-        """Collect evidence from all subsystems."""
         evidence = []
+        scores = {s: 0 for s in AdaptiveState}
 
-        # CPU evidence
-        if emu_proc:
-            if emu_proc.cpu_percent > 85:
-                evidence.append(BottleneckEvidence(
-                    bottleneck_type=BottleneckType.CPU,
-                    metric_name="Emulator CPU Usage",
-                    metric_value=emu_proc.cpu_percent,
-                    threshold=85.0,
-                    source="emulator_controller",
-                    description=f"Emulator CPU at {emu_proc.cpu_percent:.0f}% — near capacity",
-                ))
-            elif emu_proc.cpu_percent > 65:
-                evidence.append(BottleneckEvidence(
-                    bottleneck_type=BottleneckType.CPU,
-                    metric_name="Emulator CPU Usage",
-                    metric_value=emu_proc.cpu_percent,
-                    threshold=65.0,
-                    source="emulator_controller",
-                    description=f"Emulator CPU at {emu_proc.cpu_percent:.0f}% — moderate load",
-                ))
+        # Collect metric arrays
+        cpu_vals = [s.cpu_total_percent for s in samples if s.cpu_total_percent is not None]
+        gpu_vals = [s.gpu_utilization_percent for s in samples if s.gpu_utilization_percent is not None]
+        ram_used = [s.system_ram_used_mb for s in samples if s.system_ram_used_mb is not None]
+        ram_total = [s.system_ram_total_mb for s in samples if s.system_ram_total_mb is not None]
+        gpu_temps = [s.gpu_temperature_c for s in samples if s.gpu_temperature_c is not None]
+        emu_cpu = [s.emulator_cpu_percent for s in samples if s.emulator_cpu_percent is not None]
+        frame_times = [s.frame_time_ms for s in samples if s.frame_time_ms is not None and s.frame_time_ms > 0]
 
-        # GPU evidence
-        if gpu_data:
-            gpu_util = getattr(gpu_data, 'utilization_percent', 0) or 0
-            try:
-                gpu_util = float(gpu_util)
-            except (TypeError, ValueError):
-                gpu_util = 0.0
-            gpu_temp = getattr(gpu_data, 'temperature_celsius', None)
-            if gpu_util > 90:
-                evidence.append(BottleneckEvidence(
-                    bottleneck_type=BottleneckType.GPU,
-                    metric_name="GPU Utilization",
-                    metric_value=gpu_util,
-                    threshold=90.0,
-                    source="gpu_monitor",
-                    description=f"GPU utilization at {gpu_util:.0f}% — GPU bound",
-                ))
-            elif gpu_util > 70:
-                evidence.append(BottleneckEvidence(
-                    bottleneck_type=BottleneckType.GPU,
-                    metric_name="GPU Utilization",
-                    metric_value=gpu_util,
-                    threshold=70.0,
-                    source="gpu_monitor",
-                    description=f"GPU utilization at {gpu_util:.0f}% — moderate GPU load",
-                ))
+        # CPU analysis
+        if cpu_vals:
+            avg_cpu = statistics.mean(cpu_vals)
+            peak_cpu = max(cpu_vals)
+            if avg_cpu >= CPU_HIGH_THRESHOLD:
+                scores[AdaptiveState.CPU_BOUND] += 40
+                evidence.append(f"CPU averaged {avg_cpu:.1f}% (peak {peak_cpu:.1f}%)")
+            elif avg_cpu >= CPU_ELEVATED_THRESHOLD:
+                scores[AdaptiveState.CPU_BOUND] += 15
+                evidence.append(f"CPU elevated at {avg_cpu:.1f}%")
 
-            # CPU vs GPU bound analysis
-            if emu_proc and gpu_util > 0:
-                cpu_val = emu_proc.cpu_percent
-                if cpu_val > 80 and gpu_util < 50:
-                    evidence.append(BottleneckEvidence(
-                        bottleneck_type=BottleneckType.CPU,
-                        metric_name="CPU/GPU Ratio",
-                        metric_value=cpu_val / max(gpu_util, 1),
-                        threshold=2.0,
-                        source="emulator_controller",
-                        description=f"CPU {cpu_val:.0f}% vs GPU {gpu_util:.0f}% — likely CPU bound",
-                    ))
-                elif gpu_util > 85 and cpu_val < 60:
-                    evidence.append(BottleneckEvidence(
-                        bottleneck_type=BottleneckType.GPU,
-                        metric_name="CPU/GPU Ratio",
-                        metric_value=gpu_util / max(cpu_val, 1),
-                        threshold=2.0,
-                        source="gpu_monitor",
-                        description=f"GPU {gpu_util:.0f}% vs CPU {cpu_val:.0f}% — likely GPU bound",
-                    ))
+        # GPU analysis
+        if gpu_vals:
+            avg_gpu = statistics.mean(gpu_vals)
+            peak_gpu = max(gpu_vals)
+            if avg_gpu >= GPU_SATURATION_THRESHOLD:
+                scores[AdaptiveState.GPU_BOUND] += 40
+                evidence.append(f"GPU averaged {avg_gpu:.1f}% (peak {peak_gpu:.1f}%)")
+            elif avg_gpu >= GPU_ELEVATED_THRESHOLD:
+                scores[AdaptiveState.GPU_BOUND] += 15
+                evidence.append(f"GPU elevated at {avg_gpu:.1f}%")
 
-        # Memory evidence
-        if memory_diag:
-            if memory_diag.pressure_level == "CRITICAL":
-                evidence.append(BottleneckEvidence(
-                    bottleneck_type=BottleneckType.MEMORY,
-                    metric_name="Memory Pressure",
-                    metric_value=memory_diag.percent_used if hasattr(memory_diag, 'percent_used') else 0,
-                    threshold=90.0,
-                    source="memory_optimizer",
-                    description="Memory pressure CRITICAL — severe RAM constraint",
-                ))
-            elif memory_diag.pressure_level == "HIGH":
-                evidence.append(BottleneckEvidence(
-                    bottleneck_type=BottleneckType.MEMORY,
-                    metric_name="Memory Pressure",
-                    metric_value=memory_diag.percent_used if hasattr(memory_diag, 'percent_used') else 0,
-                    threshold=80.0,
-                    source="memory_optimizer",
-                    description="Memory pressure HIGH — may cause stuttering",
-                ))
+            # GPU-bound is stronger when CPU has headroom
+            if cpu_vals and avg_gpu >= 80:
+                avg_cpu = statistics.mean(cpu_vals)
+                if avg_cpu < 60:
+                    scores[AdaptiveState.GPU_BOUND] += 20
+                    evidence.append(f"GPU saturated ({avg_gpu:.1f}%) while CPU has headroom ({avg_cpu:.1f}%)")
 
-        # Thermal evidence
-        if thermal_diag:
-            if hasattr(thermal_diag, 'thermal_state'):
-                state = thermal_diag.thermal_state
-                if hasattr(state, 'value'):
-                    state_val = state.value
-                else:
-                    state_val = str(state)
-                if "THROTTLING" in state_val.upper():
-                    evidence.append(BottleneckEvidence(
-                        bottleneck_type=BottleneckType.THERMAL,
-                        metric_name="Thermal State",
-                        metric_value=1.0,
-                        threshold=0.0,
-                        source="thermal_monitor",
-                        description=f"Thermal state: {state_val} — performance degradation likely",
-                    ))
-                elif "HOT" in state_val.upper():
-                    evidence.append(BottleneckEvidence(
-                        bottleneck_type=BottleneckType.THERMAL,
-                        metric_name="Thermal State",
-                        metric_value=0.7,
-                        threshold=0.0,
-                        source="thermal_monitor",
-                        description=f"Thermal state: {state_val} — approaching throttling",
-                    ))
+        # Memory analysis
+        if ram_used and ram_total and ram_total[0] > 0:
+            avg_used = statistics.mean(ram_used)
+            total = ram_total[0]
+            used_pct = (avg_used / total) * 100
+            if used_pct >= RAM_PRESSURE_HIGH:
+                scores[AdaptiveState.MEMORY_BOUND] += 40
+                evidence.append(f"RAM at {used_pct:.1f}% ({avg_used:.0f}/{total:.0f} MB)")
+            elif used_pct >= RAM_PRESSURE_ELEVATED:
+                scores[AdaptiveState.MEMORY_BOUND] += 15
+                evidence.append(f"RAM elevated at {used_pct:.1f}%")
 
-        # Power evidence
-        if power_result:
-            classification = power_result.classification
-            if hasattr(classification, 'value'):
-                class_val = classification.value
-            else:
-                class_val = str(classification)
-            if "BATTERY" in class_val.upper():
-                evidence.append(BottleneckEvidence(
-                    bottleneck_type=BottleneckType.POWER,
-                    metric_name="Power Source",
-                    metric_value=0.0,
-                    threshold=0.0,
-                    source="power_analyzer",
-                    description="Running on battery — performance limited",
-                ))
-            elif "POWER LIMITED" in class_val.upper():
-                evidence.append(BottleneckEvidence(
-                    bottleneck_type=BottleneckType.POWER,
-                    metric_name="Power Classification",
-                    metric_value=0.5,
-                    threshold=0.0,
-                    source="power_analyzer",
-                    description=f"Power state: {class_val}",
-                ))
+        # Thermal analysis
+        if gpu_temps:
+            max_temp = max(gpu_temps)
+            avg_temp = statistics.mean(gpu_temps)
+            if max_temp >= THERMAL_CRITICAL:
+                scores[AdaptiveState.THERMAL_LIMITED] += 45
+                evidence.append(f"GPU temperature critical: {max_temp:.0f}°C")
+            elif max_temp >= THERMAL_WARNING:
+                scores[AdaptiveState.THERMAL_LIMITED] += 25
+                evidence.append(f"GPU temperature elevated: {max_temp:.0f}°C (avg {avg_temp:.0f}°C)")
 
-        # Background load evidence
-        if bg_analysis:
-            cpu_comp = bg_analysis.cpu_competition
-            if hasattr(cpu_comp, 'value'):
-                comp_val = cpu_comp.value
-            else:
-                comp_val = str(cpu_comp)
-            if comp_val.upper() in ("HIGH", "SEVERE"):
-                evidence.append(BottleneckEvidence(
-                    bottleneck_type=BottleneckType.BACKGROUND_LOAD,
-                    metric_name="CPU Competition",
-                    metric_value=bg_analysis.significant_count if hasattr(bg_analysis, 'significant_count') else 0,
-                    threshold=5.0,
-                    source="background_analyzer",
-                    description=f"Background CPU competition: {comp_val}",
-                ))
+            # Rising temperature trend
+            if len(gpu_temps) >= 10:
+                first_half = statistics.mean(gpu_temps[:len(gpu_temps) // 2])
+                second_half = statistics.mean(gpu_temps[len(gpu_temps) // 2:])
+                if second_half - first_half > 5:
+                    scores[AdaptiveState.THERMAL_LIMITED] += 10
+                    evidence.append(f"GPU temperature rising ({first_half:.0f}→{second_half:.0f}°C)")
 
-            ram_comp = bg_analysis.ram_competition
-            if hasattr(ram_comp, 'value'):
-                ram_comp_val = ram_comp.value
-            else:
-                ram_comp_val = str(ram_comp)
-            if ram_comp_val.upper() in ("HIGH", "SEVERE"):
-                evidence.append(BottleneckEvidence(
-                    bottleneck_type=BottleneckType.BACKGROUND_LOAD,
-                    metric_name="RAM Competition",
-                    metric_value=0.0,
-                    threshold=0.0,
-                    source="background_analyzer",
-                    description=f"Background RAM competition: {ram_comp_val}",
-                ))
+        # Frame time analysis
+        if frame_times and len(frame_times) >= 3:
+            avg_ft = statistics.mean(frame_times)
+            if avg_ft > 0:
+                cv = statistics.stdev(frame_times) / avg_ft if len(frame_times) > 1 else 0
+                if cv > FRAME_TIME_CV_UNSTABLE:
+                    scores[AdaptiveState.FRAME_TIME_UNSTABLE] += 40
+                    evidence.append(f"Frame time unstable (CV={cv:.2f})")
+                elif cv > FRAME_TIME_CV_MILD:
+                    scores[AdaptiveState.FRAME_TIME_UNSTABLE] += 15
+                    evidence.append(f"Frame time mildly unstable (CV={cv:.2f})")
 
-        # Emulator configuration evidence
-        if emulator_target:
-            if not emulator_target.is_high_priority:
-                evidence.append(BottleneckEvidence(
-                    bottleneck_type=BottleneckType.EMULATOR_CONFIGURATION,
-                    metric_name="Emulator Priority",
-                    metric_value=float(emulator_target.priority),
-                    threshold=-1.0,
-                    source="emulator_controller",
-                    description=f"Emulator priority: {emulator_target.priority_name} — not elevated",
-                ))
-            if not emulator_target.uses_all_cpus and emulator_target.total_cpus > 4:
-                evidence.append(BottleneckEvidence(
-                    bottleneck_type=BottleneckType.EMULATOR_CONFIGURATION,
-                    metric_name="CPU Affinity",
-                    metric_value=float(emulator_target.affinity_cpus),
-                    threshold=float(emulator_target.total_cpus),
-                    source="emulator_controller",
-                    description=f"Emulator using {emulator_target.affinity_cpus}/{emulator_target.total_cpus} CPUs",
-                ))
+        # Cross-metric analysis: CPU-bound pattern
+        if cpu_vals and gpu_vals:
+            avg_cpu = statistics.mean(cpu_vals)
+            avg_gpu = statistics.mean(gpu_vals)
+            if avg_cpu > CPU_HIGH_THRESHOLD and avg_gpu < 50:
+                scores[AdaptiveState.CPU_BOUND] += 15
+                evidence.append(f"CPU high ({avg_cpu:.1f}%) while GPU low ({avg_gpu:.1f}%)")
 
-        return evidence
+        # Cross-metric: multi-resource pressure
+        high_resources = 0
+        if cpu_vals and statistics.mean(cpu_vals) > CPU_HIGH_THRESHOLD:
+            high_resources += 1
+        if gpu_vals and statistics.mean(gpu_vals) > GPU_SATURATION_THRESHOLD:
+            high_resources += 1
+        if ram_used and ram_total and ram_total[0] > 0:
+            if (statistics.mean(ram_used) / ram_total[0]) * 100 > RAM_PRESSURE_HIGH:
+                high_resources += 1
+        if high_resources >= 2:
+            scores[AdaptiveState.RESOURCE_PRESSURE] += 30
+            evidence.append(f"{high_resources} resources under simultaneous pressure")
 
-    # ── Bottleneck Classification ─────────────────────────────
+        # Determine primary state
+        n = len(samples)
+        data_bonus = 0
+        if n >= MIN_SAMPLES_HIGH_CONFIDENCE:
+            data_bonus = 10
+            evidence.append(f"{n} samples collected (high confidence)")
+        elif n >= MIN_SAMPLES_CLASSIFY:
+            data_bonus = 5
+            evidence.append(f"{n} samples collected")
 
-    def _classify_bottleneck(
-        self, evidence: List[BottleneckEvidence]
-    ) -> Tuple[BottleneckType, float, str]:
+        # Find the highest-scoring non-INSUFFICIENT_DATA state
+        candidates = [
+            (state, score + data_bonus)
+            for state, score in scores.items()
+            if state != AdaptiveState.INSUFFICIENT_DATA and score > 0
+        ]
+
+        if not candidates:
+            # Check if we have any data at all
+            has_any = cpu_vals or gpu_vals or ram_used
+            if has_any:
+                return (
+                    AdaptiveState.OPTIMAL,
+                    50 + data_bonus,
+                    ["No persistent resource bottleneck detected"],
+                )
+            return (
+                AdaptiveState.INSUFFICIENT_DATA,
+                0,
+                ["No valid telemetry data collected"],
+            )
+
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        best_state, best_score = candidates[0]
+
+        # Cap confidence
+        confidence = min(best_score, 100)
+
+        return best_state, confidence, evidence
+
+    # ── Action Planning ───────────────────────────────────────
+
+    def generate_plan(
+        self,
+        samples: List[TelemetrySample],
+        state: AdaptiveState,
+        state_confidence: int,
+        state_evidence: List[str],
+        optimization_states: Dict[str, str] = None,
+        profile_id: str = "gaming",
+        target_name: str = "",
+        target_pid: int = 0,
+        is_admin: bool = False,
+    ) -> AdaptivePlan:
         """
-        Classify the primary bottleneck from collected evidence.
-        Returns (type, confidence, description).
+        Generate an adaptive action plan based on the current state.
+
+        Only recommends actions justified by evidence and permitted by profile.
         """
-        if not evidence:
-            return (
-                BottleneckType.UNKNOWN,
-                0.0,
-                "Insufficient data to identify bottleneck",
-            )
+        if optimization_states is None:
+            optimization_states = {}
 
-        # Count evidence per bottleneck type
-        type_scores: Dict[BottleneckType, float] = {}
-        type_counts: Dict[BottleneckType, int] = {}
-        type_descriptions: Dict[BottleneckType, List[str]] = {}
-
-        for ev in evidence:
-            bt = ev.bottleneck_type
-            if bt not in type_scores:
-                type_scores[bt] = 0.0
-                type_counts[bt] = 0
-                type_descriptions[bt] = []
-
-            # Weight by severity: higher metric relative to threshold = stronger signal
-            if ev.threshold > 0:
-                severity = min(1.0, ev.metric_value / ev.threshold)
-            else:
-                severity = 0.5  # Binary evidence (present = 0.5)
-
-            type_scores[bt] += severity
-            type_counts[bt] += 1
-            type_descriptions[bt].append(ev.description)
-
-        if not type_scores:
-            return (
-                BottleneckType.UNKNOWN,
-                0.0,
-                "No bottleneck evidence collected",
-            )
-
-        # Find the dominant bottleneck
-        dominant_type = max(type_scores, key=type_scores.get)
-        dominant_score = type_scores[dominant_type]
-        dominant_count = type_counts[dominant_type]
-
-        # Confidence based on evidence count and score strength
-        max_possible = sum(type_scores.values())
-        if max_possible > 0:
-            confidence = min(0.95, (dominant_score / max_possible) * 0.7 + (dominant_count / len(evidence)) * 0.3)
-        else:
-            confidence = 0.0
-
-        # Build description
-        descriptions = type_descriptions[dominant_type]
-        if len(descriptions) == 1:
-            desc = descriptions[0]
-        else:
-            desc = f"Primary bottleneck: {dominant_type.value} — {len(descriptions)} evidence points. " + \
-                   "; ".join(descriptions[:3])
-
-        return dominant_type, confidence, desc
-
-    # ── Recommendation Generation ─────────────────────────────
-
-    def _generate_recommendations(
-        self, bottleneck, evidence, emulator_target, windows_gaming,
-        power_result, bg_analysis, thermal_diag, memory_diag, hw_spec,
-    ):
-        """Generate targeted optimization recommendations based on bottleneck and evidence."""
-        recommended = []
-        skipped = []
-        evidence_types = {e.bottleneck_type for e in evidence}
-
-        # ── Emulator Priority ──
-        if emulator_target and not emulator_target.is_high_priority:
-            recommended.append(OptimizationAction(
-                id="emulator_priority",
-                name="Emulator Priority",
-                description="Set emulator process to HIGH priority",
-                reason="Emulator is at normal priority — scheduling contention possible",
-                evidence=f"Current priority: {emulator_target.priority_name}",
-                source_subsystem="emulator_controller",
-                status="APPLICABLE" if BottleneckType.EMULATOR_CONFIGURATION in evidence_types else "RECOMMENDATION_ONLY",
-                risk="LOW",
-                expected_impact="MEDIUM" if BottleneckType.CPU in evidence_types else "LOW",
-            ))
-        elif emulator_target and emulator_target.is_high_priority:
-            skipped.append({
-                "id": "emulator_priority",
-                "name": "Emulator Priority",
-                "reason": "Already at elevated priority",
-            })
-
-        # ── Power Plan ──
-        if power_result and not power_result.power_plan_is_performance:
-            recommended.append(OptimizationAction(
-                id="power_plan",
-                name="Power Plan",
-                description="Switch to High Performance power plan",
-                reason=f"Current plan: {power_result.power_plan_name}",
-                evidence=f"Active power plan is not performance-optimized",
-                source_subsystem="power_analyzer",
-                status="APPLICABLE",
-                risk="LOW",
-                expected_impact="MEDIUM" if BottleneckType.POWER in evidence_types else "LOW",
-            ))
-        elif power_result and power_result.power_plan_is_performance:
-            skipped.append({
-                "id": "power_plan",
-                "name": "Power Plan",
-                "reason": "Already on performance plan",
-            })
-
-        # ── Game Mode ──
-        if windows_gaming:
-            game_mode_item = None
-            for item in windows_gaming.items:
-                if item.name == "Game Mode":
-                    game_mode_item = item
-                    break
-            if game_mode_item and game_mode_item.status == "DISABLED":
-                recommended.append(OptimizationAction(
-                    id="game_mode",
-                    name="Windows Game Mode",
-                    description="Enable Windows Game Mode",
-                    reason="Game Mode is currently disabled",
-                    evidence="Windows Game Mode status: DISABLED",
-                    source_subsystem="windows_gaming",
-                    status="APPLICABLE",
-                    risk="LOW",
-                    expected_impact="LOW",
-                ))
-            elif game_mode_item and game_mode_item.status == "ENABLED":
-                skipped.append({
-                    "id": "game_mode",
-                    "name": "Windows Game Mode",
-                    "reason": "Already enabled",
-                })
-
-        # ── CPU Affinity ──
-        if emulator_target and not emulator_target.uses_all_cpus and emulator_target.total_cpus > 4:
-            if BottleneckType.CPU in evidence_types or BottleneckType.EMULATOR_CONFIGURATION in evidence_types:
-                recommended.append(OptimizationAction(
-                    id="cpu_affinity",
-                    name="CPU Affinity",
-                    description=f"Allow emulator to use all {emulator_target.total_cpus} CPUs",
-                    reason=f"Currently using {emulator_target.affinity_cpus}/{emulator_target.total_cpus}",
-                    evidence=f"Affinity restriction detected with CPU bottleneck evidence",
-                    source_subsystem="emulator_controller",
-                    status="APPLICABLE",
-                    risk="LOW",
-                    expected_impact="MEDIUM",
-                ))
-            else:
-                skipped.append({
-                    "id": "cpu_affinity",
-                    "name": "CPU Affinity",
-                    "reason": f"Using {emulator_target.affinity_cpus}/{emulator_target.total_cpus} — no CPU bottleneck detected",
-                })
-
-        # ── Background Processes (RECOMMENDATION ONLY) ──
-        if bg_analysis:
-            safe_candidates = [
-                p for p in bg_analysis.top_cpu_processes[:5]
-                if hasattr(p, 'recommendation') and p.recommendation == "SAFE_TO_RECOMMEND"
-            ] if hasattr(bg_analysis, 'top_cpu_processes') else []
-
-            if safe_candidates and BottleneckType.BACKGROUND_LOAD in evidence_types:
-                recommended.append(OptimizationAction(
-                    id="background_load",
-                    name="Background Processes",
-                    description=f"{len(safe_candidates)} optional applications consuming resources",
-                    reason="Background load is competing with emulator",
-                    evidence=f"Top: {', '.join(p.name for p in safe_candidates[:3])}",
-                    source_subsystem="background_analyzer",
-                    status="RECOMMENDATION_ONLY",
-                    risk="MEDIUM",
-                    expected_impact="MEDIUM" if len(safe_candidates) > 2 else "LOW",
-                ))
-            elif safe_candidates:
-                skipped.append({
-                    "id": "background_load",
-                    "name": "Background Processes",
-                    "reason": f"{len(safe_candidates)} safe candidates but no severe competition",
-                })
-
-        # ── Memory Pressure ──
-        if memory_diag and hasattr(memory_diag, 'pressure_level'):
-            if memory_diag.pressure_level in ("HIGH", "CRITICAL"):
-                recommended.append(OptimizationAction(
-                    id="memory_pressure",
-                    name="Memory Pressure",
-                    description="High memory usage may cause stuttering",
-                    reason=f"Pressure level: {memory_diag.pressure_level}",
-                    evidence=f"Memory pressure detected by memory_optimizer",
-                    source_subsystem="memory_optimizer",
-                    status="RECOMMENDATION_ONLY",
-                    risk="LOW",
-                    expected_impact="MEDIUM" if memory_diag.pressure_level == "CRITICAL" else "LOW",
-                ))
-
-        # ── Thermal ──
-        if thermal_diag and hasattr(thermal_diag, 'throttle_indicators'):
-            indicators = thermal_diag.throttle_indicators
-            if indicators:
-                # Check if it's a single NONE indicator
-                has_real_throttle = False
-                for ind in indicators:
-                    if hasattr(ind, 'value') and ind.value != "None Detected":
-                        has_real_throttle = True
-                    elif hasattr(ind, 'name') and ind.name != "NONE":
-                        has_real_throttle = True
-                if has_real_throttle:
-                    recommended.append(OptimizationAction(
-                        id="thermal_management",
-                        name="Thermal Management",
-                        description="Throttling indicators detected — consider reducing load",
-                        reason="GPU/CPU thermal throttling may limit performance",
-                        evidence="Thermal monitor detected throttle indicators",
-                        source_subsystem="thermal_monitor",
-                        status="RECOMMENDATION_ONLY",
-                        risk="LOW",
-                        expected_impact="HIGH",
-                    ))
-
-        return recommended, skipped
-
-    # ── Hardware Risks ─────────────────────────────────────────
-
-    def _hardware_risks(self, hw_spec) -> List[str]:
-        """Identify hardware-based risks."""
-        risks = []
-        if hw_spec:
-            if hw_spec.ram_total_gb > 0 and hw_spec.ram_total_gb < 8:
-                risks.append("System has limited RAM — memory pressure likely during gaming")
-            if hw_spec.gpu_vram_mb > 0 and hw_spec.gpu_vram_mb < 2048:
-                risks.append("GPU VRAM is limited — may cause texture streaming issues")
-            if hw_spec.cpu_physical_cores > 0 and hw_spec.cpu_physical_cores < 4:
-                risks.append("CPU has few cores — emulator may compete for CPU time")
-        return risks
-
-    # ── Impact Assessment ─────────────────────────────────────
-
-    def _assess_impact(
-        self, bottleneck, evidence, emulator_target
-    ) -> Tuple[ExpectedImpact, str]:
-        """Assess expected impact category."""
-        if not emulator_target:
-            return (
-                ExpectedImpact.UNKNOWN,
-                "No emulator detected — optimization impact cannot be assessed",
-            )
-
-        if bottleneck == BottleneckType.UNKNOWN:
-            return (
-                ExpectedImpact.UNKNOWN,
-                "No clear bottleneck identified",
-            )
-
-        # Count high-severity evidence
-        high_severity = sum(
-            1 for e in evidence
-            if e.bottleneck_type == bottleneck
-            and (e.threshold <= 0 or e.metric_value / max(e.threshold, 0.01) > 0.8)
+        plan = AdaptivePlan(
+            target_name=target_name,
+            target_pid=target_pid,
+            state=state,
+            confidence=state_confidence,
+            recommended_profile=self._recommend_profile(state, state_confidence, samples),
+            sample_count=len(samples),
         )
 
-        if high_severity >= 2:
-            return (
-                ExpectedImpact.HIGH,
-                f"Strong evidence for {bottleneck.value} bottleneck — optimization may help",
+        # Determine applicable actions based on state
+        action_specs = self._state_to_actions(state, state_confidence, samples)
+
+        # Filter by profile
+        profile_opt_ids = PROFILE_OPT_IDS.get(profile_id, set())
+
+        for opt_id, base_confidence, reason in action_specs:
+            action = self._evaluate_action(
+                opt_id, base_confidence, reason, samples,
+                optimization_states, profile_opt_ids, is_admin, state,
             )
-        elif high_severity == 1:
-            return (
-                ExpectedImpact.MEDIUM,
-                f"Moderate evidence for {bottleneck.value} bottleneck",
+            plan.actions.append(action)
+
+        self._last_plan = plan
+        return plan
+
+    def _state_to_actions(
+        self, state: AdaptiveState, confidence: int, samples: List[TelemetrySample]
+    ) -> List[Tuple[str, int, str]]:
+        """
+        Map state to action specifications.
+
+        Returns list of (optimization_id, base_confidence, reason).
+        """
+        if state == AdaptiveState.INSUFFICIENT_DATA:
+            return []
+
+        if state == AdaptiveState.OPTIMAL:
+            return []  # No actions needed
+
+        if state == AdaptiveState.CPU_BOUND:
+            return [
+                ("emulator_priority", 70, "CPU scheduling may benefit from higher emulator priority"),
+                ("power_plan", 50, "Power plan affects CPU throughput"),
+                ("background_load", 40, "Background processes may contribute to CPU pressure"),
+                ("cpu_affinity", 30, "CPU affinity may help distribute load"),
+            ]
+
+        if state == AdaptiveState.GPU_BOUND:
+            return [
+                # GPU-bound: limited software optimization
+                ("memory_analysis", 30, "GPU saturation detected; memory analysis for overall health"),
+                ("background_load", 25, "Reduce background resource contention"),
+            ]
+
+        if state == AdaptiveState.MEMORY_BOUND:
+            return [
+                ("memory_analysis", 75, "Memory pressure is elevated"),
+                ("background_load", 65, "Background processes may be consuming significant RAM"),
+            ]
+
+        if state == AdaptiveState.THERMAL_LIMITED:
+            return [
+                # Do NOT increase performance settings when thermally limited
+                ("background_load", 40, "Reducing background load may lower thermal pressure"),
+            ]
+
+        if state == AdaptiveState.FRAME_TIME_UNSTABLE:
+            return [
+                ("emulator_priority", 50, "Frame delivery is inconsistent; priority may help"),
+                ("power_plan", 40, "Power management affects frame consistency"),
+                ("background_load", 35, "Background interference may cause frame spikes"),
+            ]
+
+        if state == AdaptiveState.RESOURCE_PRESSURE:
+            return [
+                ("memory_analysis", 60, "Multiple resources under pressure"),
+                ("background_load", 55, "Background processes contribute to resource pressure"),
+                ("emulator_priority", 45, "Priority may help amid resource contention"),
+            ]
+
+        return []
+
+    def _evaluate_action(
+        self,
+        opt_id: str,
+        base_confidence: int,
+        reason: str,
+        samples: List[TelemetrySample],
+        states: Dict[str, str],
+        profile_opt_ids: set,
+        is_admin: bool,
+        state: AdaptiveState,
+    ) -> AdaptiveAction:
+        """Evaluate a single action for the plan."""
+        from app.core.recommendation_engine import OPTIMIZATION_META
+
+        meta = OPTIMIZATION_META.get(opt_id, {})
+        name = meta.get("name", opt_id)
+        expected_area = meta.get("expected_area", "")
+        safety = meta.get("safety", "")
+
+        # Check profile membership
+        if opt_id not in profile_opt_ids:
+            return AdaptiveAction(
+                optimization_id=opt_id,
+                optimization_name=name,
+                status=ActionStatus.SKIPPED_NOT_IN_PROFILE,
+                confidence=0,
+                reason=f"{name} is not in the {state.value} profile",
+                expected_area=expected_area,
+                safety=safety,
             )
-        else:
-            return (
-                ExpectedImpact.LOW,
-                f"Weak evidence for {bottleneck.value} bottleneck",
+
+        # Check current state
+        current = states.get(opt_id, "UNKNOWN")
+
+        if current in ("ALREADY_OPTIMAL", "APPLIED", "VERIFIED"):
+            return AdaptiveAction(
+                optimization_id=opt_id,
+                optimization_name=name,
+                status=ActionStatus.ALREADY_OPTIMAL,
+                confidence=100,
+                reason=f"{name} is already optimal",
+                expected_area=expected_area,
+                safety=safety,
             )
 
-    # ── Assessment Generation ─────────────────────────────────
+        if current == "REQUIRES_ADMIN":
+            return AdaptiveAction(
+                optimization_id=opt_id,
+                optimization_name=name,
+                status=ActionStatus.REQUIRES_ADMIN,
+                confidence=90,
+                reason=f"{name} requires administrator privileges",
+                expected_area=expected_area,
+                safety=safety,
+            )
 
-    def _generate_assessment(self, decision: OptimizationDecision) -> str:
-        """Generate a human-readable overall assessment."""
-        parts = []
+        if current == "RECOMMENDATION_ONLY":
+            return AdaptiveAction(
+                optimization_id=opt_id,
+                optimization_name=name,
+                status=ActionStatus.RECOMMENDATION_ONLY,
+                confidence=60,
+                reason=f"{name} is advisory only",
+                expected_area=expected_area,
+                safety=safety,
+            )
 
-        if decision.bottleneck == BottleneckType.UNKNOWN:
-            parts.append("No clear performance bottleneck detected.")
+        if current in ("NOT_AVAILABLE", "NOT_APPLICABLE"):
+            return AdaptiveAction(
+                optimization_id=opt_id,
+                optimization_name=name,
+                status=ActionStatus.NOT_AVAILABLE,
+                confidence=0,
+                reason=f"{name} is not available",
+                expected_area=expected_area,
+                safety=safety,
+            )
+
+        # Safety gate: admin required but not available
+        if safety == "REQUIRES_ADMIN" and not is_admin:
+            return AdaptiveAction(
+                optimization_id=opt_id,
+                optimization_name=name,
+                status=ActionStatus.REQUIRES_ADMIN,
+                confidence=base_confidence,
+                reason=f"{name} requires elevation",
+                expected_area=expected_area,
+                safety=safety,
+            )
+
+        # Safety gate: insufficient evidence
+        n = len(samples)
+        if n < MIN_SAMPLES_CLASSIFY:
+            return AdaptiveAction(
+                optimization_id=opt_id,
+                optimization_name=name,
+                status=ActionStatus.SKIPPED_INSUFFICIENT_EVIDENCE,
+                confidence=0,
+                reason="Insufficient telemetry samples for this action",
+                expected_area=expected_area,
+                safety=safety,
+            )
+
+        # Apply confidence scaling
+        if n >= MIN_SAMPLES_HIGH_CONFIDENCE:
+            confidence = min(base_confidence, 100)
+        elif n >= MIN_SAMPLES_CLASSIFY:
+            confidence = min(base_confidence, 75)
         else:
-            parts.append(f"Primary bottleneck: {decision.bottleneck.value} "
-                         f"({decision.bottleneck_confidence:.0%} confidence).")
+            confidence = min(base_confidence, 50)
 
-        if decision.has_emulator:
-            parts.append(f"Emulator: {decision.emulator_name} (PID {decision.emulator_pid}).")
+        return AdaptiveAction(
+            optimization_id=opt_id,
+            optimization_name=name,
+            status=ActionStatus.APPLIED,  # Will be actual APPLIED only after execute
+            confidence=confidence,
+            reason=reason,
+            expected_area=expected_area,
+            safety=safety,
+        )
+
+    # ── Profile Intelligence ──────────────────────────────────
+
+    def _recommend_profile(
+        self, state: AdaptiveState, confidence: int, samples: List[TelemetrySample]
+    ) -> str:
+        """Recommend the most appropriate profile for the current state."""
+        if state == AdaptiveState.INSUFFICIENT_DATA:
+            return "gaming"  # Default
+
+        if state == AdaptiveState.OPTIMAL:
+            return "balanced"  # No aggressive optimization needed
+
+        if state == AdaptiveState.THERMAL_LIMITED:
+            # Do NOT recommend max performance when thermally limited
+            return "balanced"
+
+        if state in (AdaptiveState.RESOURCE_PRESSURE, AdaptiveState.MEMORY_BOUND):
+            return "max_performance"  # Need all available tools
+
+        if state in (AdaptiveState.CPU_BOUND, AdaptiveState.FRAME_TIME_UNSTABLE):
+            return "gaming"
+
+        if state == AdaptiveState.GPU_BOUND:
+            return "gaming"  # Limited software optimization for GPU-bound
+
+        return "gaming"
+
+    def assess_profile_suitability(
+        self,
+        profile_id: str,
+        state: AdaptiveState,
+        state_confidence: int,
+        is_admin: bool = False,
+        samples: List[TelemetrySample] = None,
+    ) -> ProfileSuitabilityResult:
+        """Assess how suitable a profile is for the current situation."""
+        reasons = []
+
+        if state == AdaptiveState.INSUFFICIENT_DATA:
+            return ProfileSuitabilityResult(
+                profile_id=profile_id,
+                suitability=ProfileSuitability.UNKNOWN,
+                reason="Insufficient telemetry to assess suitability",
+            )
+
+        if state == AdaptiveState.OPTIMAL and profile_id == "max_performance":
+            return ProfileSuitabilityResult(
+                profile_id=profile_id,
+                suitability=ProfileSuitability.MARGINAL,
+                reason="System is optimal; aggressive optimization may not be justified",
+                evidence=["No bottleneck detected", "All resources have headroom"],
+            )
+
+        if state == AdaptiveState.THERMAL_LIMITED and profile_id == "max_performance":
+            return ProfileSuitabilityResult(
+                profile_id=profile_id,
+                suitability=ProfileSuitability.UNSUITABLE,
+                reason="Thermal state elevated; increasing performance settings may worsen thermals",
+                evidence=["GPU/CPU temperature approaching limits"],
+            )
+
+        if state == AdaptiveState.THERMAL_LIMITED and profile_id == "gaming":
+            return ProfileSuitabilityResult(
+                profile_id=profile_id,
+                suitability=ProfileSuitability.MARGINAL,
+                reason="Thermal state elevated; gaming profile includes power plan which may increase thermal load",
+            )
+
+        # Check admin requirements for the profile
+        profile_opts = PROFILE_OPT_IDS.get(profile_id, set())
+        admin_opts = {"emulator_priority", "cpu_affinity"}
+        needs_admin = profile_opts & admin_opts
+        if needs_admin and not is_admin:
+            reasons.append(f"Profile requires admin for: {', '.join(needs_admin)}")
+
+        # Match profile to state
+        if state == AdaptiveState.CPU_BOUND:
+            if profile_id in ("gaming", "max_performance"):
+                return ProfileSuitabilityResult(
+                    profile_id=profile_id,
+                    suitability=ProfileSuitability.SUITABLE,
+                    reason="Profile includes CPU-relevant optimizations",
+                    evidence=[f"CPU-bound with {state_confidence}% confidence"],
+                )
+            else:
+                return ProfileSuitabilityResult(
+                    profile_id=profile_id,
+                    suitability=ProfileSuitability.MARGINAL,
+                    reason="Balanced profile has limited CPU optimization",
+                )
+
+        if state == AdaptiveState.MEMORY_BOUND:
+            if profile_id in ("gaming", "max_performance"):
+                return ProfileSuitabilityResult(
+                    profile_id=profile_id,
+                    suitability=ProfileSuitability.SUITABLE,
+                    reason="Profile includes memory analysis",
+                )
+            return ProfileSuitabilityResult(
+                profile_id=profile_id,
+                suitability=ProfileSuitability.MARGINAL,
+                reason="Balanced profile lacks memory optimization",
+            )
+
+        if state == AdaptiveState.GPU_BOUND:
+            return ProfileSuitabilityResult(
+                profile_id=profile_id,
+                suitability=ProfileSuitability.MARGINAL,
+                reason="Limited software optimization available for GPU-bound workload",
+            )
+
+        # Default
+        return ProfileSuitabilityResult(
+            profile_id=profile_id,
+            suitability=ProfileSuitability.SUITABLE,
+            reason="Profile is compatible with current state",
+        )
+
+    # ── Execution ─────────────────────────────────────────────
+
+    def execute_plan(self, plan: AdaptivePlan) -> AdaptivePlan:
+        """
+        Execute an adaptive plan using the existing optimizer.
+
+        Only applies actions with APPLIED status.
+        Verifies each application.
+        Records results.
+        """
+        from app.core.optimizer import optimizer
+
+        if not plan.actions:
+            return plan
+
+        for action in plan.actions:
+            if action.status != ActionStatus.APPLIED:
+                continue  # Only execute planned actions
+
+            try:
+                from app.core.optimizations import get_optimization_by_id
+                opt = get_optimization_by_id(action.optimization_id)
+                if not opt:
+                    action.status = ActionStatus.FAILED
+                    action.reason = f"Optimization {action.optimization_id} not found"
+                    continue
+
+                # Check
+                check_result = opt.check()
+                if check_result.status.value in ("ALREADY OPTIMAL",):
+                    action.status = ActionStatus.ALREADY_OPTIMAL
+                    action.reason = "Already optimal at execution time"
+                    continue
+                elif check_result.status.value == "REQUIRES_ADMIN":
+                    action.status = ActionStatus.REQUIRES_ADMIN
+                    action.reason = "Administrator privileges required"
+                    continue
+                elif check_result.status.value in ("NOT APPLICABLE", "NOT AVAILABLE"):
+                    action.status = ActionStatus.NOT_AVAILABLE
+                    action.reason = "Not available at execution time"
+                    continue
+                elif check_result.status.value == "RECOMMENDATION ONLY":
+                    action.status = ActionStatus.RECOMMENDATION_ONLY
+                    action.reason = "Recommendation only — no system change"
+                    continue
+                elif check_result.status.value != "OPTIMIZABLE":
+                    action.status = ActionStatus.SKIPPED_INSUFFICIENT_EVIDENCE
+                    action.reason = f"Unexpected state: {check_result.status.value}"
+                    continue
+
+                # Snapshot
+                try:
+                    opt.snapshot()
+                except Exception as e:
+                    logger.warning(f"Snapshot failed for {action.optimization_name}: {e}")
+
+                # Apply
+                apply_result = opt.apply()
+                if apply_result.status.value == "APPLIED":
+                    time.sleep(0.3)
+                    verified = opt.verify()
+                    if verified:
+                        action.status = ActionStatus.APPLIED
+                        action.rollback_available = True
+                        action.reason = f"Applied and verified: {apply_result.message}"
+                    else:
+                        action.status = ActionStatus.FAILED
+                        action.reason = f"Applied but verification failed"
+                else:
+                    action.status = ActionStatus.FAILED
+                    action.reason = f"Apply returned: {apply_result.status.value}"
+
+            except Exception as e:
+                action.status = ActionStatus.FAILED
+                action.reason = f"Execution error: {e}"
+                logger.error(f"Adaptive action failed: {action.optimization_name}: {e}")
+
+        return plan
+
+    # ── Session History ───────────────────────────────────────
+
+    def compare_with_history(
+        self, current: AdaptiveSessionRecord
+    ) -> Optional[Dict]:
+        """Compare current session with most recent similar session."""
+        history = self.history
+        if not history:
+            return None
+
+        # Find most recent session with same profile
+        previous = None
+        for h in history:
+            if h.profile == current.profile and h.session_id != current.session_id:
+                previous = h
+                break
+
+        if not previous:
+            return None
+
+        comparison = {
+            "previous_session": previous.to_dict(),
+            "fps_change": None,
+            "one_low_change": None,
+            "frame_time_change": None,
+            "overall": "INCONCLUSIVE",
+            "confidence": "LOW",
+        }
+
+        if current.baseline_fps is not None and previous.post_fps is not None:
+            comparison["fps_change"] = current.baseline_fps - previous.post_fps
+        if current.baseline_1low is not None and previous.post_1low is not None:
+            comparison["one_low_change"] = current.baseline_1low - previous.post_1low
+
+        # Determine overall
+        changes = [
+            comparison["fps_change"],
+            comparison["one_low_change"],
+        ]
+        valid_changes = [c for c in changes if c is not None]
+        if not valid_changes:
+            comparison["overall"] = "INCONCLUSIVE"
+        elif all(c > 1 for c in valid_changes):
+            comparison["overall"] = "IMPROVED"
+            comparison["confidence"] = "MODERATE"
+        elif all(c < -1 for c in valid_changes):
+            comparison["overall"] = "DEGRADED"
+            comparison["confidence"] = "MODERATE"
         else:
-            parts.append("No emulator detected — optimizations may have limited impact.")
+            comparison["overall"] = "MIXED"
+            comparison["confidence"] = "LOW"
 
-        applicable = [o for o in decision.recommended_optimizations if o.status == "APPLICABLE"]
-        recommendations = [o for o in decision.recommended_optimizations if o.status == "RECOMMENDATION_ONLY"]
+        return comparison
+
+    def save_session(self, record: AdaptiveSessionRecord):
+        """Save a session record and update history."""
+        self._history.insert(0, record)
+        if len(self._history) > MAX_HISTORY:
+            self._history = self._history[:MAX_HISTORY]
+        _save_session_record(record)
+
+    # ── CLI Formatting ────────────────────────────────────────
+
+    def format_status(self, plan: AdaptivePlan) -> str:
+        """Format adaptive status for CLI."""
+        lines = []
+        lines.append("=" * 55)
+        lines.append("HEAVEN SOCIETY — ADAPTIVE STATUS")
+        lines.append("=" * 55)
+        lines.append("")
+
+        lines.append("TARGET")
+        if plan.target_name:
+            lines.append(f"  {plan.target_name}  PID: {plan.target_pid}")
+        else:
+            lines.append("  No emulator detected")
+        lines.append("")
+
+        state_str = plan.state.value.replace("_", " ").title()
+        lines.append("STATE")
+        lines.append(f"  {state_str}")
+        lines.append(f"  Confidence: {plan.confidence}%")
+        lines.append("")
+
+        lines.append("DATA")
+        lines.append(f"  Samples: {plan.sample_count}")
+        lines.append("")
+
+        lines.append(f"RECOMMENDED PROFILE: {plan.recommended_profile.upper()}")
+        lines.append("")
+
+        if plan.actions:
+            lines.append("ACTIONS")
+            lines.append("-" * 55)
+            for a in plan.actions:
+                status_str = a.status.value.replace("_", " ")
+                lines.append(f"  {a.optimization_name}")
+                lines.append(f"    Status: {status_str}")
+                lines.append(f"    Confidence: {a.confidence}%")
+                lines.append(f"    Why: {a.reason}")
+                lines.append(f"    Area: {a.expected_area}")
+                lines.append(f"    Safety: {a.safety}")
+                lines.append("")
+        else:
+            lines.append("ACTIONS")
+            lines.append("-" * 55)
+            if plan.state == AdaptiveState.OPTIMAL:
+                lines.append("  System is optimal — no actions needed.")
+            elif plan.state == AdaptiveState.INSUFFICIENT_DATA:
+                lines.append("  Insufficient data — collect more telemetry.")
+            else:
+                lines.append("  No applicable actions.")
+            lines.append("")
+
+        lines.append("=" * 55)
+        return "\n".join(lines)
+
+    def format_plan(self, plan: AdaptivePlan) -> str:
+        """Format action plan for CLI."""
+        lines = []
+        lines.append("=" * 55)
+        lines.append("HEAVEN SOCIETY — ADAPTIVE ACTION PLAN")
+        lines.append("=" * 55)
+        lines.append("")
+
+        state_str = plan.state.value.replace("_", " ").title()
+        lines.append(f"STATE: {state_str} ({plan.confidence}% confidence)")
+        lines.append(f"PROFILE: {plan.recommended_profile.upper()}")
+        lines.append(f"TARGET: {plan.target_name or 'None'} PID: {plan.target_pid}")
+        lines.append("")
+
+        applicable = [a for a in plan.actions if a.status in (
+            ActionStatus.APPLIED, ActionStatus.ALREADY_OPTIMAL,
+            ActionStatus.REQUIRES_ADMIN, ActionStatus.RECOMMENDATION_ONLY,
+        )]
 
         if applicable:
-            parts.append(f"{len(applicable)} optimization(s) can be applied.")
-        if recommendations:
-            parts.append(f"{len(recommendations)} recommendation(s) for review.")
+            lines.append("PLANNED ACTIONS")
+            lines.append("-" * 55)
+            for i, a in enumerate(applicable, 1):
+                status_str = a.status.value.replace("_", " ")
+                lines.append(f"  {i}. {a.optimization_name}")
+                lines.append(f"     Status: {status_str}")
+                lines.append(f"     Confidence: {a.confidence}%")
+                lines.append(f"     Why: {a.reason}")
+                lines.append(f"     Area: {a.expected_area}")
+                lines.append(f"     Safety: {a.safety}")
+                if a.evidence:
+                    ev_parts = []
+                    for ev in a.evidence[:3]:
+                        v = f"{ev.measured_value}" if ev.measured_value is not None else "N/A"
+                        ev_parts.append(f"{ev.metric}: {v}{ev.unit}")
+                    lines.append(f"     Evidence: {' | '.join(ev_parts)}")
+                lines.append("")
+        else:
+            lines.append("No applicable actions.")
+            lines.append("")
 
-        if decision.risks:
-            parts.append(f"{len(decision.risks)} risk(s) identified.")
-
-        return " ".join(parts)
+        lines.append("=" * 55)
+        return "\n".join(lines)
 
 
-# ── Singleton ─────────────────────────────────────────────────
-
+# Singleton
 adaptive_optimizer = AdaptiveOptimizer()

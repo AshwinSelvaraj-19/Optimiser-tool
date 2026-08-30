@@ -2046,71 +2046,118 @@ def main():
         return 0
 
     if "--analyze-gaming" in sys.argv:
-        from app.core.adaptive_optimizer import adaptive_optimizer, BottleneckType, ExpectedImpact
+        from app.core.adaptive_optimizer import adaptive_optimizer
+        from app.performance.realtime_telemetry import RealtimeTelemetry
+        from app.performance.presentmon_provider import PresentMonProvider
+        from app.core.optimizer import optimizer
+        import time as _time
 
-        decision = adaptive_optimizer.analyze(force=True)
+        duration = 10
+        for i, arg in enumerate(sys.argv):
+            if arg == "--duration" and i + 1 < len(sys.argv):
+                try:
+                    duration = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
 
         print("=" * 50)
-        print("HEAVEN SOCIETY — ADAPTIVE GAMING ANALYSIS")
+        print("HEAVEN SOCIETY — GAMING ANALYSIS")
         print("=" * 50)
 
-        # Target
-        print(f"\nTARGET")
-        if decision.has_emulator:
-            print(f"  Emulator:    {decision.emulator_name}")
-            print(f"  PID:         {decision.emulator_pid}")
+        # Detect target
+        from app.emulator.detector import emulator_detector
+        emus = emulator_detector.detect_all()
+        target_pid = 0
+        target_name = ""
+        if emus:
+            emu = emus[0]
+            target_pid = getattr(emu, 'pid', 0) or 0
+            target_name = getattr(emu, 'process_name', '') or getattr(emu, 'name', 'Emulator')
+            print(f"\nTARGET")
+            print(f"  Emulator:    {target_name}")
+            print(f"  PID:         {target_pid}")
         else:
+            print(f"\nTARGET")
             print(f"  Status:      No emulator detected")
 
-        # Bottleneck
-        bn = decision.bottleneck
+        # Collect telemetry
+        engine = RealtimeTelemetry(interval_ms=500, max_samples=duration * 2 + 10)
+        pm = PresentMonProvider()
+        pm_available, _ = pm.is_available()
+        if pm_available and target_name:
+            pm.start(target_process=target_name, duration=duration + 5)
+            if pm.is_running():
+                engine.set_fps_provider(pm)
+
+        session = engine.start_session(target_name, target_pid)
+        try:
+            for _ in range(duration):
+                _time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            engine.stop_session()
+            if pm.is_running():
+                pm.stop()
+
+        samples = engine.recent_snapshots()
+        state, confidence, evidence = adaptive_optimizer.classify_state(samples)
+
+        # Get optimization states
+        opt_status = optimizer.get_current_status()
+        states = {o["id"]: o.get("status", "UNKNOWN") for o in opt_status.get("optimizations", [])}
+
+        is_admin = False
+        try:
+            from app.utils.admin import is_admin as check_admin
+            is_admin = check_admin()
+        except Exception:
+            pass
+
+        plan = adaptive_optimizer.generate_plan(
+            samples=samples, state=state, state_confidence=confidence,
+            state_evidence=evidence, optimization_states=states,
+            target_name=target_name, target_pid=target_pid, is_admin=is_admin,
+        )
+
+        # Profile suitability
+        from app.core.adaptive_optimizer import ProfileSuitability
+        suitability = adaptive_optimizer.assess_profile_suitability(
+            plan.recommended_profile, state, confidence, is_admin, samples,
+        )
+
+        state_str = state.value.replace("_", " ").title()
         print(f"\nBOTTLENECK")
-        print(f"  Type:        {bn.value}")
-        print(f"  Confidence:  {decision.bottleneck_confidence:.0%}")
-        print(f"  Detail:      {decision.bottleneck_description}")
+        print(f"  Type:        {state_str}")
+        print(f"  Confidence:  {confidence}%")
+        for ev in evidence[:5]:
+            print(f"  Detail:      {ev}")
 
-        # Evidence
-        if decision.evidence:
-            print(f"\nEVIDENCE ({len(decision.evidence)} points)")
-            for ev in decision.evidence:
-                print(f"  [{ev.bottleneck_type.value:20s}] {ev.description}")
+        print(f"\nRECOMMENDED PROFILE: {plan.recommended_profile.upper()}")
+        print(f"  Suitability: {suitability.suitability.value}")
+        print(f"  Reason:      {suitability.reason}")
 
-        # Recommended optimizations
-        if decision.recommended_optimizations:
-            print(f"\nRECOMMENDED ACTIONS ({len(decision.recommended_optimizations)})")
-            for opt in decision.recommended_optimizations:
-                status_icon = {
-                    "APPLICABLE": "+",
-                    "ALREADY_OPTIMAL": "=",
-                    "REQUIRES_ADMIN": "!",
-                    "RECOMMENDATION_ONLY": "~",
-                    "NOT_APPLICABLE": "-",
-                }.get(opt.status, "?")
-                print(f"  {status_icon} {opt.name:24s} {opt.status}")
-                print(f"    {opt.description}")
-                print(f"    Evidence: {opt.evidence}")
-                print(f"    Impact:   {opt.expected_impact} | Risk: {opt.risk}")
-
-        # Skipped
-        if decision.skipped_optimizations:
-            print(f"\nSKIPPED ({len(decision.skipped_optimizations)})")
-            for skip in decision.skipped_optimizations:
-                print(f"  — {skip['name']:24s} {skip['reason']}")
-
-        # Risks
-        if decision.risks:
-            print(f"\nRISKS")
-            for risk in decision.risks:
-                print(f"  ⚠ {risk}")
-
-        # Impact
-        print(f"\nEXPECTED IMPACT")
-        print(f"  Category:    {decision.expected_impact.value}")
-        print(f"  Reason:      {decision.impact_reason}")
+        applicable = [a for a in plan.actions if a.status.value not in ("SKIPPED_NOT_IN_PROFILE",)]
+        if applicable:
+            print(f"\nACTIONS ({len(applicable)})")
+            for a in applicable:
+                icon = {"APPLIED": "+", "ALREADY_OPTIMAL": "=", "REQUIRES_ADMIN": "!",
+                        "RECOMMENDATION_ONLY": "~", "NOT_AVAILABLE": "-"}.get(a.status.value, "?")
+                print(f"  {icon} {a.optimization_name:24s} {a.status.value}")
+                print(f"    {a.reason}")
+        else:
+            print(f"\nNo applicable actions.")
 
         # Assessment
-        print(f"\nASSESSMENT")
-        print(f"  {decision.overall_assessment}")
+        if state.value == "OPTIMAL":
+            print(f"\nASSESSMENT")
+            print(f"  No clear performance bottleneck detected. System appears balanced.")
+        elif state.value == "INSUFFICIENT_DATA":
+            print(f"\nASSESSMENT")
+            print(f"  Insufficient telemetry data to assess gaming performance.")
+        else:
+            print(f"\nASSESSMENT")
+            print(f"  {state_str} detected with {confidence}% confidence.")
 
         print("\n" + "=" * 50)
         print("GAMING ANALYSIS COMPLETE")
@@ -2872,6 +2919,251 @@ def main():
         )
 
         print(recommendation_engine.format_session(rec_session))
+        return 0
+
+    if "--adaptive-status" in sys.argv:
+        from app.core.adaptive_optimizer import adaptive_optimizer
+        from app.performance.realtime_telemetry import RealtimeTelemetry
+        from app.performance.presentmon_provider import PresentMonProvider
+        from app.core.optimizer import optimizer
+        import time as _time
+
+        duration = 10
+        for i, arg in enumerate(sys.argv):
+            if arg == "--duration" and i + 1 < len(sys.argv):
+                try:
+                    duration = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+
+        print("Collecting telemetry...", flush=True)
+
+        # Detect target
+        from app.emulator.detector import emulator_detector
+        emus = emulator_detector.detect_all()
+        target_pid = 0
+        target_name = ""
+        if emus:
+            emu = emus[0]
+            target_pid = getattr(emu, 'pid', 0) or 0
+            target_name = getattr(emu, 'process_name', '') or getattr(emu, 'name', 'Emulator')
+
+        engine = RealtimeTelemetry(interval_ms=500, max_samples=duration * 2 + 10)
+
+        pm = PresentMonProvider()
+        pm_available, _ = pm.is_available()
+        if pm_available and target_name:
+            pm.start(target_process=target_name, duration=duration + 5)
+            if pm.is_running():
+                engine.set_fps_provider(pm)
+
+        session = engine.start_session(target_name, target_pid)
+        try:
+            for _ in range(duration):
+                _time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            engine.stop_session()
+            if pm.is_running():
+                pm.stop()
+
+        samples = engine.recent_snapshots()
+        state, confidence, evidence = adaptive_optimizer.classify_state(samples)
+
+        opt_status = optimizer.get_current_status()
+        states = {o["id"]: o.get("status", "UNKNOWN") for o in opt_status.get("optimizations", [])}
+
+        is_admin = False
+        try:
+            from app.utils.admin import is_admin as check_admin
+            is_admin = check_admin()
+        except Exception:
+            pass
+
+        plan = adaptive_optimizer.generate_plan(
+            samples=samples, state=state, state_confidence=confidence,
+            state_evidence=evidence, optimization_states=states,
+            target_name=target_name, target_pid=target_pid, is_admin=is_admin,
+        )
+
+        print(adaptive_optimizer.format_status(plan))
+        return 0
+
+    if "--adaptive-plan" in sys.argv:
+        from app.core.adaptive_optimizer import adaptive_optimizer
+        from app.performance.realtime_telemetry import RealtimeTelemetry
+        from app.performance.presentmon_provider import PresentMonProvider
+        from app.core.optimizer import optimizer
+        import time as _time
+
+        duration = 10
+        for i, arg in enumerate(sys.argv):
+            if arg == "--duration" and i + 1 < len(sys.argv):
+                try:
+                    duration = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+
+        print("Collecting telemetry for plan...", flush=True)
+
+        from app.emulator.detector import emulator_detector
+        emus = emulator_detector.detect_all()
+        target_pid = 0
+        target_name = ""
+        if emus:
+            emu = emus[0]
+            target_pid = getattr(emu, 'pid', 0) or 0
+            target_name = getattr(emu, 'process_name', '') or getattr(emu, 'name', 'Emulator')
+
+        engine = RealtimeTelemetry(interval_ms=500, max_samples=duration * 2 + 10)
+        pm = PresentMonProvider()
+        pm_available, _ = pm.is_available()
+        if pm_available and target_name:
+            pm.start(target_process=target_name, duration=duration + 5)
+            if pm.is_running():
+                engine.set_fps_provider(pm)
+
+        session = engine.start_session(target_name, target_pid)
+        try:
+            for _ in range(duration):
+                _time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            engine.stop_session()
+            if pm.is_running():
+                pm.stop()
+
+        samples = engine.recent_snapshots()
+        state, confidence, evidence = adaptive_optimizer.classify_state(samples)
+
+        opt_status = optimizer.get_current_status()
+        states = {o["id"]: o.get("status", "UNKNOWN") for o in opt_status.get("optimizations", [])}
+
+        is_admin = False
+        try:
+            from app.utils.admin import is_admin as check_admin
+            is_admin = check_admin()
+        except Exception:
+            pass
+
+        plan = adaptive_optimizer.generate_plan(
+            samples=samples, state=state, state_confidence=confidence,
+            state_evidence=evidence, optimization_states=states,
+            target_name=target_name, target_pid=target_pid, is_admin=is_admin,
+        )
+
+        print(adaptive_optimizer.format_plan(plan))
+        return 0
+
+    if "--adaptive-optimize" in sys.argv:
+        from app.core.adaptive_optimizer import adaptive_optimizer
+        from app.performance.realtime_telemetry import RealtimeTelemetry
+        from app.performance.presentmon_provider import PresentMonProvider
+        from app.core.optimizer import optimizer
+        import time as _time
+
+        profile_id = "gaming"
+        duration = 10
+        for i, arg in enumerate(sys.argv):
+            if arg == "--profile" and i + 1 < len(sys.argv):
+                profile_id = sys.argv[i + 1]
+            if arg == "--duration" and i + 1 < len(sys.argv):
+                try:
+                    duration = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — ADAPTIVE OPTIMIZATION")
+        print("=" * 55)
+        print(f"Profile: {profile_id.upper()}  Duration: {duration}s")
+        print()
+
+        from app.emulator.detector import emulator_detector
+        emus = emulator_detector.detect_all()
+        target_pid = 0
+        target_name = ""
+        if emus:
+            emu = emus[0]
+            target_pid = getattr(emu, 'pid', 0) or 0
+            target_name = getattr(emu, 'process_name', '') or getattr(emu, 'name', 'Emulator')
+            print(f"TARGET: {target_name} PID: {target_pid}")
+        else:
+            print("TARGET: No emulator detected")
+        print()
+
+        engine = RealtimeTelemetry(interval_ms=500, max_samples=duration * 2 + 10)
+        pm = PresentMonProvider()
+        pm_available, _ = pm.is_available()
+        if pm_available and target_name:
+            pm.start(target_process=target_name, duration=duration + 5)
+            if pm.is_running():
+                engine.set_fps_provider(pm)
+
+        session = engine.start_session(target_name, target_pid)
+        print(f"Collecting baseline telemetry ({duration}s)...", flush=True)
+        try:
+            for _ in range(duration):
+                _time.sleep(1)
+                print(".", end="", flush=True)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            engine.stop_session()
+            if pm.is_running():
+                pm.stop()
+        print()
+
+        samples = engine.recent_snapshots()
+        state, confidence, evidence = adaptive_optimizer.classify_state(samples)
+        state_str = state.value.replace("_", " ").title()
+        print(f"STATE: {state_str} ({confidence}% confidence)")
+
+        opt_status = optimizer.get_current_status()
+        states = {o["id"]: o.get("status", "UNKNOWN") for o in opt_status.get("optimizations", [])}
+
+        is_admin = False
+        try:
+            from app.utils.admin import is_admin as check_admin
+            is_admin = check_admin()
+        except Exception:
+            pass
+
+        plan = adaptive_optimizer.generate_plan(
+            samples=samples, state=state, state_confidence=confidence,
+            state_evidence=evidence, optimization_states=states,
+            profile_id=profile_id, target_name=target_name,
+            target_pid=target_pid, is_admin=is_admin,
+        )
+
+        # Execute plan
+        print("\nExecuting plan...")
+        plan = adaptive_optimizer.execute_plan(plan)
+
+        applied = [a for a in plan.actions if a.status.value == "APPLIED"]
+        optimal = [a for a in plan.actions if a.status.value == "ALREADY_OPTIMAL"]
+        admin = [a for a in plan.actions if a.status.value == "REQUIRES_ADMIN"]
+        failed = [a for a in plan.actions if a.status.value == "FAILED"]
+        rec_only = [a for a in plan.actions if a.status.value == "RECOMMENDATION_ONLY"]
+
+        print(f"\nRESULTS")
+        print(f"  Applied:    {len(applied)}")
+        print(f"  Optimal:    {len(optimal)}")
+        print(f"  Admin:      {len(admin)}")
+        print(f"  Failed:     {len(failed)}")
+        print(f"  Review:     {len(rec_only)}")
+
+        for a in applied:
+            print(f"  ✓ {a.optimization_name}: {a.reason}")
+        for a in admin:
+            print(f"  ! {a.optimization_name}: {a.reason}")
+        for a in rec_only:
+            print(f"  • {a.optimization_name}: {a.reason}")
+
+        print()
+        print("=" * 55)
         return 0
 
     if "--final-validation" in sys.argv:

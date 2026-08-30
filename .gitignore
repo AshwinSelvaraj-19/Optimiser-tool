@@ -70,3 +70,4 @@ Desktop.ini
 # Secrets
 secrets.*
 credentials.*
+adaptive_sessions/
