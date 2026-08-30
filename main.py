@@ -3166,6 +3166,316 @@ def main():
         print("=" * 55)
         return 0
 
+    if "--input-diagnostics" in sys.argv:
+        from app.input.input_diagnostics import run_input_diagnostics, format_input_status
+        from app.core.optimizer import optimizer
+
+        opt_status = optimizer.get_current_status()
+        target_name = opt_status.get("target_name", "")
+        target_pid = opt_status.get("target_pid", 0)
+
+        session = run_input_diagnostics(target_name=target_name, target_pid=target_pid)
+        print(format_input_status(session))
+        return 0
+
+    if "--input-test" in sys.argv:
+        from app.input.input_diagnostics import (
+            PollingMeasurementSession, detect_pointing_devices,
+            detect_pointer_config, InputDiagnosticSession,
+        )
+        import time as _time
+        import uuid as _uuid
+
+        duration = 5
+        for i, arg in enumerate(sys.argv):
+            if arg == "--duration" and i + 1 < len(sys.argv):
+                try:
+                    duration = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — INPUT POLLING TEST")
+        print("=" * 55)
+        print(f"Duration: {duration}s  |  Move your mouse during measurement")
+        print()
+
+        # Measure polling
+        print("Measuring mouse event rate...")
+        poll_session = PollingMeasurementSession(duration_seconds=duration)
+        polling = poll_session.measure()
+        print()
+
+        # Pointer config
+        pointer = detect_pointer_config()
+
+        print("RESULTS")
+        print("-" * 55)
+        if polling.state.value == "MEASURED":
+            print(f"  Events Captured:   {polling.total_events}")
+            print(f"  Observed Rate:    {polling.observed_rate_hz:.0f} Hz")
+            print(f"  Median Interval:  {polling.median_interval_ms:.2f} ms")
+            print(f"  Std Deviation:    {polling.interval_std_dev_ms:.2f} ms")
+            print(f"  CV:               {polling.coefficient_of_variation:.3f}")
+            print(f"  Consistency:      {polling.consistency.value}")
+        else:
+            print(f"  Status:           {polling.state.value}")
+            print(f"  Note:             {polling.note}")
+        print()
+        epp = "ENABLED" if pointer.enhance_pointer_precision else "DISABLED"
+        print(f"  Pointer Precision: {epp}")
+        print(f"  Pointer Speed:    {pointer.pointer_speed}/11")
+        print()
+        print("=" * 55)
+        return 0
+
+    if "--input-latency" in sys.argv:
+        from app.input.input_diagnostics import estimate_input_latency
+        from app.input.latency import latency_diagnostics
+        from app.system.display import display_monitor
+
+        display = display_monitor.detect()
+        report = latency_diagnostics.diagnose(
+            display_refresh_hz=display.refresh_rate_hz,
+        )
+        estimate = estimate_input_latency(
+            display_refresh_hz=display.refresh_rate_hz,
+        )
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — INPUT LATENCY DIAGNOSTICS")
+        print("=" * 55)
+        print()
+        print(f"  Display Refresh:      {display.refresh_rate_hz} Hz")
+        print(f"  Display Latency:      {report.estimated_display_latency_ms:.1f} ms (frame interval)")
+        print(f"  Scheduling Latency:   {estimate.scheduling_latency_ms:.1f} ms (estimated)")
+        print(f"  Estimated Total:      {estimate.estimated_total_ms:.1f} ms")
+        print()
+        print(f"  NOTE: {estimate.note}")
+        print()
+        separation = latency_diagnostics.separate_settings_from_reality()
+        print("  Settings (measurable):")
+        for item in separation["input_settings"]["includes"]:
+            print(f"    - {item}")
+        print()
+        print(f"  Actual Latency: {separation['actual_latency']['note']}")
+        print()
+        print("=" * 55)
+        return 0
+
+    if "--gameplay-diagnostics" in sys.argv:
+        from app.input.input_diagnostics import run_input_diagnostics
+        from app.input.gameplay_diagnostics import run_gameplay_diagnostics, format_gameplay_diagnostics
+        from app.performance.realtime_telemetry import RealtimeTelemetry
+        from app.performance.presentmon_provider import PresentMonProvider
+        from app.core.optimizer import optimizer
+        import time as _time
+
+        duration = 10
+        for i, arg in enumerate(sys.argv):
+            if arg == "--duration" and i + 1 < len(sys.argv):
+                try:
+                    duration = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+
+        # Detect target
+        from app.emulator.detector import emulator_detector
+        emus = emulator_detector.detect_all()
+        target_pid = 0
+        target_name = ""
+        if emus:
+            emu = emus[0]
+            target_pid = getattr(emu, 'pid', 0) or 0
+            target_name = getattr(emu, 'process_name', '') or getattr(emu, 'name', 'Emulator')
+
+        # Collect telemetry
+        engine = RealtimeTelemetry(interval_ms=500, max_samples=duration * 2 + 10)
+        pm = PresentMonProvider()
+        pm_available, _ = pm.is_available()
+        if pm_available and target_name:
+            pm.start(target_process=target_name, duration=duration + 5)
+            if pm.is_running():
+                engine.set_fps_provider(pm)
+
+        print(f"Collecting gameplay telemetry ({duration}s)...", flush=True)
+        session = engine.start_session(target_name, target_pid)
+        try:
+            for _ in range(duration):
+                _time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            engine.stop_session()
+            if pm.is_running():
+                pm.stop()
+
+        samples = engine.recent_snapshots()
+
+        # Run input diagnostics
+        opt_status = optimizer.get_current_status()
+        input_session = run_input_diagnostics(
+            target_name=target_name, target_pid=target_pid,
+        )
+
+        # Run gameplay diagnostics
+        gameplay = run_gameplay_diagnostics(
+            samples=samples, input_session=input_session,
+            target_name=target_name, target_pid=target_pid,
+        )
+
+        print(format_gameplay_diagnostics(gameplay))
+        return 0
+
+    if "--sensitivity-analysis" in sys.argv:
+        from app.input.gameplay_diagnostics import (
+            SensitivityData, SensitivityDataType, analyze_sensitivity,
+        )
+
+        # Parse user-provided values
+        data = SensitivityData(data_type=SensitivityDataType.USER_REPORTED)
+        for i, arg in enumerate(sys.argv):
+            if arg == "--dpi" and i + 1 < len(sys.argv):
+                try:
+                    data.dpi = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+            if arg == "--sens" and i + 1 < len(sys.argv):
+                try:
+                    data.general_sensitivity = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+            if arg == "--red-dot" and i + 1 < len(sys.argv):
+                try:
+                    data.red_dot = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+            if arg == "--2x" and i + 1 < len(sys.argv):
+                try:
+                    data.scope_2x = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+            if arg == "--4x" and i + 1 < len(sys.argv):
+                try:
+                    data.scope_4x = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+            if arg == "--sniper" and i + 1 < len(sys.argv):
+                try:
+                    data.sniper = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+
+        analysis = analyze_sensitivity(data)
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — SENSITIVITY ANALYSIS")
+        print("=" * 55)
+        print()
+        print("  Data Type: USER_REPORTED (not measured)")
+        print()
+        if data.dpi:
+            print(f"  DPI:                 {data.dpi}")
+        if data.general_sensitivity:
+            print(f"  General Sensitivity: {data.general_sensitivity}")
+        if data.red_dot:
+            print(f"  Red Dot:             {data.red_dot}")
+        if data.scope_2x:
+            print(f"  2x Scope:            {data.scope_2x}")
+        if data.scope_4x:
+            print(f"  4x Scope:            {data.scope_4x}")
+        if data.sniper:
+            print(f"  Sniper:              {data.sniper}")
+        print()
+
+        if analysis.effective_dpi:
+            print(f"  Effective DPI:       {analysis.effective_dpi:.0f}")
+        if analysis.cm_per_360:
+            print(f"  Est. cm/360:         {analysis.cm_per_360:.1f} cm")
+        if analysis.scope_scaling:
+            print(f"\n  Scope Scaling:")
+            for name, scale in analysis.scope_scaling.items():
+                print(f"    {name:12s}  ×{scale:.2f}")
+        if analysis.warnings:
+            print(f"\n  WARNINGS:")
+            for w in analysis.warnings:
+                print(f"    ⚠ {w}")
+        if analysis.recommendations:
+            print(f"\n  NOTES:")
+            for r in analysis.recommendations:
+                print(f"    {r}")
+        print()
+        print("=" * 55)
+        return 0
+
+    if "--input-report" in sys.argv:
+        from app.input.input_diagnostics import run_input_diagnostics, format_input_status
+        from app.input.gameplay_diagnostics import run_gameplay_diagnostics, format_gameplay_diagnostics
+        from app.core.optimizer import optimizer
+        from app.performance.realtime_telemetry import RealtimeTelemetry
+        from app.performance.presentmon_provider import PresentMonProvider
+        import time as _time
+        import json as _json
+        import os as _os
+
+        duration = 10
+        for i, arg in enumerate(sys.argv):
+            if arg == "--duration" and i + 1 < len(sys.argv):
+                try:
+                    duration = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+
+        # Detect target
+        from app.emulator.detector import emulator_detector
+        emus = emulator_detector.detect_all()
+        target_pid = 0
+        target_name = ""
+        if emus:
+            emu = emus[0]
+            target_pid = getattr(emu, 'pid', 0) or 0
+            target_name = getattr(emu, 'process_name', '') or getattr(emu, 'name', 'Emulator')
+
+        print(f"Collecting data ({duration}s)...", flush=True)
+        engine = RealtimeTelemetry(interval_ms=500, max_samples=duration * 2 + 10)
+        pm = PresentMonProvider()
+        pm_available, _ = pm.is_available()
+        if pm_available and target_name:
+            pm.start(target_process=target_name, duration=duration + 5)
+            if pm.is_running():
+                engine.set_fps_provider(pm)
+
+        session = engine.start_session(target_name, target_pid)
+        try:
+            for _ in range(duration):
+                _time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            engine.stop_session()
+            if pm.is_running():
+                pm.stop()
+
+        samples = engine.recent_snapshots()
+        input_session = run_input_diagnostics(target_name=target_name, target_pid=target_pid)
+        gameplay = run_gameplay_diagnostics(
+            samples=samples, input_session=input_session,
+            target_name=target_name, target_pid=target_pid,
+        )
+
+        print(format_input_status(input_session))
+        print(format_gameplay_diagnostics(gameplay))
+
+        # Save report
+        report = gameplay.to_dict()
+        report["input"] = input_session.to_dict()
+        report_path = _os.path.join("reports", f"input_report_{gameplay.session_id}.json")
+        _os.makedirs("reports", exist_ok=True)
+        with open(report_path, "w") as f:
+            _json.dump(report, f, indent=2)
+        print(f"Report saved: {report_path}")
+        return 0
+
     if "--final-validation" in sys.argv:
         from app.core.validation_engine import run_final_validation
 

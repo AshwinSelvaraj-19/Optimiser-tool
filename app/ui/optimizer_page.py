@@ -860,6 +860,54 @@ class OptimizerPage(QWidget):
 
         layout.addWidget(self.adaptive_frame)
 
+        # ── INPUT & GAMEPLAY ──
+        self.input_frame = QFrame()
+        self.input_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
+        input_layout = QVBoxLayout(self.input_frame)
+        input_layout.setContentsMargins(12, 8, 12, 8)
+        input_layout.setSpacing(3)
+
+        input_header = QHBoxLayout()
+        input_title = QLabel("INPUT & GAMEPLAY")
+        input_title.setStyleSheet(f"""
+            color: {TEXT_PRIMARY}; font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
+        """)
+        input_header.addWidget(input_title)
+        input_header.addStretch()
+        self.input_score_label = QLabel("")
+        self.input_score_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_MONO};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        input_header.addWidget(self.input_score_label)
+        input_layout.addLayout(input_header)
+
+        self.input_condition_label = QLabel("Condition: —")
+        self.input_condition_label.setStyleSheet(f"""
+            color: {TEXT_SECONDARY}; font-family: {FONT_MONO};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        input_layout.addWidget(self.input_condition_label)
+
+        self.input_detail_label = QLabel("")
+        self.input_detail_label.setWordWrap(True)
+        self.input_detail_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        input_layout.addWidget(self.input_detail_label)
+
+        self.input_rec_label = QLabel("")
+        self.input_rec_label.setWordWrap(True)
+        self.input_rec_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        input_layout.addWidget(self.input_rec_label)
+
+        layout.addWidget(self.input_frame)
+
         # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
@@ -978,6 +1026,7 @@ class OptimizerPage(QWidget):
         self._load_telemetry_status()
         self._load_recommendations()
         self._load_adaptive_status()
+        self._load_input_status()
 
     def _load_status(self):
         """Load current optimization status with live target detection."""
@@ -2099,6 +2148,71 @@ class OptimizerPage(QWidget):
 
         except Exception as e:
             logger.debug(f"Adaptive status load: {e}")
+
+    def _load_input_status(self):
+        """Load input & gameplay status into the compact section."""
+        try:
+            from app.input.input_diagnostics import run_input_diagnostics
+            from app.input.gameplay_diagnostics import run_gameplay_diagnostics
+            from app.core.telemetry import telemetry_engine
+            from app.performance.telemetry_models import TelemetrySample
+            from app.core.optimizer import optimizer
+
+            opt_status = optimizer.get_current_status()
+            target_name = opt_status.get("target_name", "")
+            target_pid = opt_status.get("target_pid", 0)
+
+            frame = telemetry_engine.current
+            samples = []
+            if frame and frame.timestamp > 0:
+                sample = TelemetrySample(
+                    timestamp=frame.timestamp,
+                    emulator_pid=target_pid,
+                    emulator_name=target_name,
+                    cpu_total_percent=frame.cpu_utilization,
+                    gpu_utilization_percent=frame.gpu_utilization,
+                    system_ram_used_mb=frame.ram_used_mb,
+                    system_ram_total_mb=frame.ram_total_mb,
+                    system_ram_available_mb=frame.ram_total_mb - frame.ram_used_mb if frame.ram_total_mb else None,
+                )
+                samples.append(sample)
+
+            input_session = run_input_diagnostics(
+                target_name=target_name, target_pid=target_pid,
+            )
+
+            gameplay = run_gameplay_diagnostics(
+                samples=samples, input_session=input_session,
+                target_name=target_name, target_pid=target_pid,
+            )
+
+            # Update labels
+            cond_str = gameplay.condition.value.replace("_", " ").title()
+            self.input_condition_label.setText(f"Condition: {cond_str}")
+
+            cs = gameplay.consistency_score
+            if cs.overall_score > 0:
+                self.input_score_label.setText(f"{cs.overall_score}/100 ({cs.level.value})")
+            else:
+                self.input_score_label.setText("N/A")
+
+            # Detail: pointer + polling
+            pc = input_session.pointer_config
+            epp = "ON" if pc.enhance_pointer_precision else "OFF"
+            detail = f"Pointer Accel: {epp}"
+            if input_session.polling and input_session.polling.observed_rate_hz > 0:
+                detail += f"  |  Rate: {input_session.polling.observed_rate_hz:.0f}Hz ({input_session.polling.consistency.value})")
+            self.input_detail_label.setText(detail)
+
+            # Top recommendation
+            if gameplay.recommendations:
+                top = gameplay.recommendations[0]
+                self.input_rec_label.setText(f"{top.category}: {top.reason[:100]}")
+            else:
+                self.input_rec_label.setText("")
+
+        except Exception as e:
+            logger.debug(f"Input status load: {e}")
 
     def _log(self, msg):
         self.log_text.append(msg)
