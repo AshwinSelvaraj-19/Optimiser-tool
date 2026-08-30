@@ -908,6 +908,46 @@ class OptimizerPage(QWidget):
 
         layout.addWidget(self.input_frame)
 
+        # ── RESPONSIVENESS ──
+        self.resp_frame = QFrame()
+        self.resp_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
+        resp_layout = QVBoxLayout(self.resp_frame)
+        resp_layout.setContentsMargins(12, 8, 12, 8)
+        resp_layout.setSpacing(3)
+
+        resp_header = QHBoxLayout()
+        resp_title = QLabel("RESPONSIVENESS")
+        resp_title.setStyleSheet(f"""
+            color: {TEXT_PRIMARY}; font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
+        """)
+        resp_header.addWidget(resp_title)
+        resp_header.addStretch()
+        self.resp_score_label = QLabel("")
+        self.resp_score_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_MONO};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        resp_header.addWidget(self.resp_score_label)
+        resp_layout.addLayout(resp_header)
+
+        self.resp_state_label = QLabel("State: —")
+        self.resp_state_label.setStyleSheet(f"""
+            color: {TEXT_SECONDARY}; font-family: {FONT_MONO};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        resp_layout.addWidget(self.resp_state_label)
+
+        self.resp_detail_label = QLabel("")
+        self.resp_detail_label.setWordWrap(True)
+        self.resp_detail_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        resp_layout.addWidget(self.resp_detail_label)
+
+        layout.addWidget(self.resp_frame)
+
         # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
@@ -1027,6 +1067,7 @@ class OptimizerPage(QWidget):
         self._load_recommendations()
         self._load_adaptive_status()
         self._load_input_status()
+        self._load_responsiveness_status()
 
     def _load_status(self):
         """Load current optimization status with live target detection."""
@@ -2213,6 +2254,62 @@ class OptimizerPage(QWidget):
 
         except Exception as e:
             logger.debug(f"Input status load: {e}")
+
+    def _load_responsiveness_status(self):
+        """Load responsiveness status into the compact section."""
+        try:
+            from app.input.responsiveness_analyzer import analyze_responsiveness
+            from app.input.input_diagnostics import run_input_diagnostics
+            from app.core.telemetry import telemetry_engine
+            from app.performance.telemetry_models import TelemetrySample
+            from app.core.optimizer import optimizer
+
+            opt_status = optimizer.get_current_status()
+            target_name = opt_status.get("target_name", "")
+            target_pid = opt_status.get("target_pid", 0)
+
+            frame = telemetry_engine.current
+            samples = []
+            if frame and frame.timestamp > 0:
+                sample = TelemetrySample(
+                    timestamp=frame.timestamp,
+                    emulator_pid=target_pid,
+                    emulator_name=target_name,
+                    cpu_total_percent=frame.cpu_utilization,
+                    gpu_utilization_percent=frame.gpu_utilization,
+                    system_ram_used_mb=frame.ram_used_mb,
+                    system_ram_total_mb=frame.ram_total_mb,
+                    system_ram_available_mb=frame.ram_total_mb - frame.ram_used_mb if frame.ram_total_mb else None,
+                )
+                samples.append(sample)
+
+            input_session = run_input_diagnostics(
+                target_name=target_name, target_pid=target_pid,
+            )
+
+            result = analyze_responsiveness(
+                samples=samples, input_session=input_session,
+                target_name=target_name, target_pid=target_pid,
+            )
+
+            # Update labels
+            state_str = result.state.value.replace("_", " ").title()
+            self.resp_state_label.setText(f"State: {state_str}")
+
+            sc = result.score
+            if sc.overall > 0:
+                self.resp_score_label.setText(f"{sc.overall}/100 ({sc.level})")
+            else:
+                self.resp_score_label.setText("N/A")
+
+            detail = f"Confidence: {result.confidence.value} ({result.confidence_percent}%)"
+            if result.recommendations:
+                top = result.recommendations[0]
+                detail += f"  |  {top['category']}: {top['reason'][:80]}"
+            self.resp_detail_label.setText(detail)
+
+        except Exception as e:
+            logger.debug(f"Responsiveness status load: {e}")
 
     def _log(self, msg):
         self.log_text.append(msg)

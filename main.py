@@ -3476,6 +3476,207 @@ def main():
         print(f"Report saved: {report_path}")
         return 0
 
+    if "--responsiveness-status" in sys.argv:
+        from app.input.responsiveness_analyzer import analyze_responsiveness, format_responsiveness
+        from app.input.input_diagnostics import run_input_diagnostics
+        from app.performance.realtime_telemetry import RealtimeTelemetry
+        from app.performance.presentmon_provider import PresentMonProvider
+        from app.core.optimizer import optimizer
+        import time as _time
+
+        duration = 5
+        for i, arg in enumerate(sys.argv):
+            if arg == "--duration" and i + 1 < len(sys.argv):
+                try:
+                    duration = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+
+        # Detect target
+        from app.emulator.detector import emulator_detector
+        emus = emulator_detector.detect_all()
+        target_pid = 0
+        target_name = ""
+        if emus:
+            emu = emus[0]
+            target_pid = getattr(emu, 'pid', 0) or 0
+            target_name = getattr(emu, 'process_name', '') or getattr(emu, 'name', 'Emulator')
+
+        # Collect telemetry
+        engine = RealtimeTelemetry(interval_ms=500, max_samples=duration * 2 + 10)
+        pm = PresentMonProvider()
+        pm_available, _ = pm.is_available()
+        if pm_available and target_name:
+            pm.start(target_process=target_name, duration=duration + 5)
+            if pm.is_running():
+                engine.set_fps_provider(pm)
+
+        session = engine.start_session(target_name, target_pid)
+        try:
+            for _ in range(duration):
+                _time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            engine.stop_session()
+            if pm.is_running():
+                pm.stop()
+
+        samples = engine.recent_snapshots()
+        input_session = run_input_diagnostics(target_name=target_name, target_pid=target_pid)
+        result = analyze_responsiveness(
+            samples=samples, input_session=input_session,
+            target_name=target_name, target_pid=target_pid,
+            duration_seconds=duration,
+        )
+        print(format_responsiveness(result))
+        return 0
+
+    if "--responsiveness-test" in sys.argv:
+        from app.input.responsiveness_analyzer import analyze_responsiveness, format_responsiveness
+        from app.input.input_diagnostics import run_input_diagnostics, PollingMeasurementSession
+        from app.performance.realtime_telemetry import RealtimeTelemetry
+        from app.performance.presentmon_provider import PresentMonProvider
+        import time as _time
+        import threading as _threading
+
+        duration = 10
+        for i, arg in enumerate(sys.argv):
+            if arg == "--duration" and i + 1 < len(sys.argv):
+                try:
+                    duration = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — RESPONSIVENESS TEST")
+        print("=" * 55)
+        print(f"Duration: {duration}s  |  Move mouse during measurement")
+        print()
+
+        # Detect target
+        from app.emulator.detector import emulator_detector
+        emus = emulator_detector.detect_all()
+        target_pid = 0
+        target_name = ""
+        if emus:
+            emu = emus[0]
+            target_pid = getattr(emu, 'pid', 0) or 0
+            target_name = getattr(emu, 'process_name', '') or getattr(emu, 'name', 'Emulator')
+            print(f"TARGET: {target_name} PID: {target_pid}")
+        else:
+            print("TARGET: No emulator detected")
+        print()
+
+        # Start polling measurement in parallel
+        poll_session = PollingMeasurementSession(duration_seconds=duration)
+        poll_thread = _threading.Thread(target=poll_session.measure, daemon=True)
+        poll_thread.start()
+
+        # Collect telemetry
+        engine = RealtimeTelemetry(interval_ms=500, max_samples=duration * 2 + 10)
+        pm = PresentMonProvider()
+        pm_available, _ = pm.is_available()
+        if pm_available and target_name:
+            pm.start(target_process=target_name, duration=duration + 5)
+            if pm.is_running():
+                engine.set_fps_provider(pm)
+
+        print(f"Collecting ({duration}s)... ", end="", flush=True)
+        telem_session = engine.start_session(target_name, target_pid)
+        try:
+            for _ in range(duration):
+                _time.sleep(1)
+                print(".", end="", flush=True)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            engine.stop_session()
+            if pm.is_running():
+                pm.stop()
+        print()
+
+        # Wait for polling
+        poll_thread.join(timeout=2)
+
+        samples = engine.recent_snapshots()
+        input_session = run_input_diagnostics(target_name=target_name, target_pid=target_pid)
+        # Attach actual polling measurement
+        input_session.polling = poll_session.measure()
+
+        result = analyze_responsiveness(
+            samples=samples, input_session=input_session,
+            target_name=target_name, target_pid=target_pid,
+            duration_seconds=duration,
+        )
+        print(format_responsiveness(result))
+        return 0
+
+    if "--responsiveness-report" in sys.argv:
+        from app.input.responsiveness_analyzer import analyze_responsiveness, format_responsiveness
+        from app.input.input_diagnostics import run_input_diagnostics
+        from app.performance.realtime_telemetry import RealtimeTelemetry
+        from app.performance.presentmon_provider import PresentMonProvider
+        import time as _time
+        import json as _json
+        import os as _os
+
+        duration = 30
+        for i, arg in enumerate(sys.argv):
+            if arg == "--duration" and i + 1 < len(sys.argv):
+                try:
+                    duration = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+
+        # Detect target
+        from app.emulator.detector import emulator_detector
+        emus = emulator_detector.detect_all()
+        target_pid = 0
+        target_name = ""
+        if emus:
+            emu = emus[0]
+            target_pid = getattr(emu, 'pid', 0) or 0
+            target_name = getattr(emu, 'process_name', '') or getattr(emu, 'name', 'Emulator')
+
+        print(f"Collecting data ({duration}s)...", flush=True)
+        engine = RealtimeTelemetry(interval_ms=500, max_samples=duration * 2 + 10)
+        pm = PresentMonProvider()
+        pm_available, _ = pm.is_available()
+        if pm_available and target_name:
+            pm.start(target_process=target_name, duration=duration + 5)
+            if pm.is_running():
+                engine.set_fps_provider(pm)
+
+        session = engine.start_session(target_name, target_pid)
+        try:
+            for _ in range(duration):
+                _time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            engine.stop_session()
+            if pm.is_running():
+                pm.stop()
+
+        samples = engine.recent_snapshots()
+        input_session = run_input_diagnostics(target_name=target_name, target_pid=target_pid)
+        result = analyze_responsiveness(
+            samples=samples, input_session=input_session,
+            target_name=target_name, target_pid=target_pid,
+            duration_seconds=duration,
+        )
+
+        print(format_responsiveness(result))
+
+        # Save report
+        report_path = _os.path.join("reports", f"responsiveness_{result.session_id}.json")
+        _os.makedirs("reports", exist_ok=True)
+        with open(report_path, "w") as f:
+            _json.dump(result.to_dict(), f, indent=2)
+        print(f"Report saved: {report_path}")
+        return 0
+
     if "--final-validation" in sys.argv:
         from app.core.validation_engine import run_final_validation
 
