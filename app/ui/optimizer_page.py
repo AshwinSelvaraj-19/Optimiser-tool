@@ -772,6 +772,54 @@ class OptimizerPage(QWidget):
 
         layout.addWidget(self.telemetry_frame)
 
+        # ── RECOMMENDATIONS ──
+        self.rec_frame = QFrame()
+        self.rec_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
+        rec_layout = QVBoxLayout(self.rec_frame)
+        rec_layout.setContentsMargins(12, 8, 12, 8)
+        rec_layout.setSpacing(3)
+
+        rec_header = QHBoxLayout()
+        rec_title = QLabel("RECOMMENDATIONS")
+        rec_title.setStyleSheet(f"""
+            color: {TEXT_PRIMARY}; font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
+        """)
+        rec_header.addWidget(rec_title)
+        rec_header.addStretch()
+        self.rec_quality_label = QLabel("")
+        self.rec_quality_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_MONO};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        rec_header.addWidget(self.rec_quality_label)
+        rec_layout.addLayout(rec_header)
+
+        self.rec_bottleneck_label = QLabel("Bottleneck: —")
+        self.rec_bottleneck_label.setStyleSheet(f"""
+            color: {TEXT_SECONDARY}; font-family: {FONT_MONO};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        rec_layout.addWidget(self.rec_bottleneck_label)
+
+        self.rec_top_label = QLabel("Top: —")
+        self.rec_top_label.setWordWrap(True)
+        self.rec_top_label.setStyleSheet(f"""
+            color: {TEXT_SECONDARY}; font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        rec_layout.addWidget(self.rec_top_label)
+
+        self.rec_detail_label = QLabel("")
+        self.rec_detail_label.setWordWrap(True)
+        self.rec_detail_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        rec_layout.addWidget(self.rec_detail_label)
+
+        layout.addWidget(self.rec_frame)
+
         # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
@@ -888,6 +936,7 @@ class OptimizerPage(QWidget):
         self._load_memory_status()
         self._load_startup_status()
         self._load_telemetry_status()
+        self._load_recommendations()
 
     def _load_status(self):
         """Load current optimization status with live target detection."""
@@ -1859,6 +1908,94 @@ class OptimizerPage(QWidget):
 
         except Exception as e:
             logger.debug(f"Telemetry status load: {e}")
+
+    def _load_recommendations(self):
+        """Load recommendation status into the compact section."""
+        try:
+            from app.core.recommendation_engine import recommendation_engine
+            from app.core.optimizer import optimizer
+            from app.performance.telemetry_models import BottleneckType
+
+            # Get current optimization states
+            opt_status = optimizer.get_current_status()
+            states = {}
+            for opt in opt_status.get("optimizations", []):
+                states[opt["id"]] = opt.get("status", "UNKNOWN")
+
+            # Get target info
+            target_name = opt_status.get("target_name", "")
+            target_pid = opt_status.get("target_pid", 0)
+
+            # Try quick telemetry from the existing collector
+            from app.core.telemetry import telemetry_engine
+            frame = telemetry_engine.current
+
+            # Build minimal samples for recommendation engine
+            samples = []
+            if frame and frame.timestamp > 0:
+                from app.performance.telemetry_models import TelemetrySample
+                sample = TelemetrySample(
+                    timestamp=frame.timestamp,
+                    emulator_pid=target_pid,
+                    emulator_name=target_name,
+                    cpu_total_percent=frame.cpu_utilization,
+                    gpu_utilization_percent=frame.gpu_utilization,
+                    system_ram_used_mb=frame.ram_used_mb,
+                    system_ram_total_mb=frame.ram_total_mb,
+                    system_ram_available_mb=frame.ram_total_mb - frame.ram_used_mb if frame.ram_total_mb else None,
+                )
+                samples.append(sample)
+
+            # Determine bottleneck from thermal status
+            bottleneck = BottleneckType.INSUFFICIENT_DATA
+            bn_confidence = 0
+            if frame:
+                if frame.thermal_status == "THROTTLING":
+                    bottleneck = BottleneckType.THERMAL_LIMITED
+                    bn_confidence = 70
+                elif frame.cpu_utilization > 85:
+                    bottleneck = BottleneckType.CPU_BOUND
+                    bn_confidence = 60
+                elif frame.gpu_utilization > 90:
+                    bottleneck = BottleneckType.GPU_BOUND
+                    bn_confidence = 60
+                elif frame.ram_percent > 85:
+                    bottleneck = BottleneckType.MEMORY_BOUND
+                    bn_confidence = 60
+                else:
+                    bottleneck = BottleneckType.NO_CLEAR_BOTTLENECK
+                    bn_confidence = 40
+
+            session = recommendation_engine.analyze(
+                samples=samples,
+                bottleneck_type=bottleneck,
+                bottleneck_confidence=bn_confidence,
+                optimization_states=states,
+                target_name=target_name,
+                target_pid=target_pid,
+            )
+
+            # Update labels
+            bn_str = session.bottleneck.replace("_", " ").title()
+            self.rec_bottleneck_label.setText(
+                f"Bottleneck: {bn_str} ({session.bottleneck_confidence}%)"
+            )
+            self.rec_quality_label.setText(session.telemetry_quality.value)
+
+            top = session.get_top_recommendations(3)
+            if top:
+                first = top[0]
+                self.rec_top_label.setText(
+                    f"Top: {first.optimization_name} — {first.priority.value}"
+                )
+                evidence_str = first.reason[:100]
+                self.rec_detail_label.setText(f"{evidence_str}")
+            else:
+                self.rec_top_label.setText("No actionable recommendations")
+                self.rec_detail_label.setText("")
+
+        except Exception as e:
+            logger.debug(f"Recommendations load: {e}")
 
     def _log(self, msg):
         self.log_text.append(msg)

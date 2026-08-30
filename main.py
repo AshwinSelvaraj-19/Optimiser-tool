@@ -2787,6 +2787,93 @@ def main():
         print("=" * 50)
         return 0
 
+    if "--recommendations" in sys.argv:
+        from app.core.recommendation_engine import recommendation_engine
+        from app.performance.realtime_telemetry import RealtimeTelemetry
+        from app.performance.presentmon_provider import PresentMonProvider
+        from app.core.optimizer import optimizer
+        import time as _time
+
+        duration = 15
+        for i, arg in enumerate(sys.argv):
+            if arg == "--duration" and i + 1 < len(sys.argv):
+                try:
+                    duration = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — PERFORMANCE ASSESSMENT")
+        print("=" * 55)
+        print(f"Collecting telemetry for {duration}s...")
+        print()
+
+        # Detect target
+        from app.emulator.detector import emulator_detector
+        emus = emulator_detector.detect_all()
+        target_pid = 0
+        target_name = ""
+        if emus:
+            emu = emus[0]
+            target_pid = getattr(emu, 'pid', 0) or 0
+            target_name = getattr(emu, 'process_name', '') or getattr(emu, 'name', 'Emulator')
+
+        # Create telemetry engine
+        engine = RealtimeTelemetry(
+            interval_ms=500,
+            max_samples=duration * 2 + 10,
+        )
+
+        # Try PresentMon
+        pm = PresentMonProvider()
+        pm_available, _ = pm.is_available()
+        if pm_available and target_name:
+            pm.start(target_process=target_name, duration=duration + 5)
+            if pm.is_running():
+                engine.set_fps_provider(pm)
+
+        # Collect telemetry
+        session = engine.start_session(target_name, target_pid)
+
+        print(f"Collecting ", end="", flush=True)
+        try:
+            for _ in range(duration):
+                _time.sleep(1)
+                print(".", end="", flush=True)
+        except KeyboardInterrupt:
+            print("\nInterrupted.")
+        finally:
+            engine.stop_session()
+            if pm.is_running():
+                pm.stop()
+        print()
+        print()
+
+        # Get bottleneck
+        bottleneck = engine.get_bottleneck()
+        samples = engine.recent_snapshots()
+
+        # Get optimization states
+        opt_status = optimizer.get_current_status()
+        states = {}
+        for opt in opt_status.get("optimizations", []):
+            states[opt["id"]] = opt.get("status", "UNKNOWN")
+
+        # Run recommendation engine
+        rec_session = recommendation_engine.analyze(
+            samples=samples,
+            bottleneck_type=bottleneck.bottleneck,
+            bottleneck_confidence=bottleneck.confidence,
+            bottleneck_evidence=bottleneck.evidence,
+            optimization_states=states,
+            target_name=target_name,
+            target_pid=target_pid,
+            duration_seconds=duration,
+        )
+
+        print(recommendation_engine.format_session(rec_session))
+        return 0
+
     if "--final-validation" in sys.argv:
         from app.core.validation_engine import run_final_validation
 
