@@ -1,0 +1,12 @@
+{
+  "name": "Competitive",
+  "description": "Optimized for maximum visibility and enemy detection in competitive play",
+  "saturation": 85,
+  "contrast": 115,
+  "sharpness": 60,
+  "bloom": 0,
+  "hdr": 10,
+  "ambient_light": 30,
+  "vignette": 0,
+  "shadow": -15
+}

@@ -1,0 +1,10 @@
+{
+  "name": "Custom",
+  "description": "User-customized optimization profile",
+  "target": "CUSTOM",
+  "settings": [
+    {"key": "power_plan", "name": "Power Plan", "description": "Power plan selection", "default_value": "balanced", "enabled": false},
+    {"key": "game_mode", "name": "Game Mode", "description": "Windows Game Mode", "default_value": true, "enabled": false},
+    {"key": "emulator_priority", "name": "Emulator Priority", "description": "Emulator process priority", "default_value": true, "enabled": false}
+  ]
+}

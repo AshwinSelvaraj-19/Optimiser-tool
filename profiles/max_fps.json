@@ -1,0 +1,10 @@
+{
+  "name": "MAX FPS",
+  "description": "Maximum practical FPS with best frame-time consistency",
+  "target": "MAXIMUM PRACTICAL FPS + MAXIMUM FRAME-TIME STABILITY",
+  "settings": [
+    {"key": "power_plan", "name": "Power Plan", "description": "High Performance power plan", "default_value": "high_performance", "enabled": true},
+    {"key": "game_mode", "name": "Game Mode", "description": "Windows Game Mode", "default_value": true, "enabled": true},
+    {"key": "emulator_priority", "name": "Emulator Priority", "description": "Set emulator to high priority", "default_value": true, "enabled": true}
+  ]
+}

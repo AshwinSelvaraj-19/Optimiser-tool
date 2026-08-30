@@ -1,0 +1,12 @@
+{
+  "name": "High Contrast",
+  "description": "High contrast mode for improved edge detection and visibility",
+  "saturation": 90,
+  "contrast": 135,
+  "sharpness": 70,
+  "bloom": 0,
+  "hdr": 40,
+  "ambient_light": 10,
+  "vignette": 40,
+  "shadow": -20
+}

@@ -1,0 +1,9 @@
+{
+  "name": "Balanced",
+  "description": "Balanced performance with moderate optimizations and lower risk",
+  "target": "GOOD FPS + STABLE FRAMETIME + LOW RISK",
+  "settings": [
+    {"key": "power_plan", "name": "Power Plan", "description": "Balanced or High Performance", "default_value": "balanced", "enabled": true},
+    {"key": "game_mode", "name": "Game Mode", "description": "Windows Game Mode", "default_value": true, "enabled": true}
+  ]
+}

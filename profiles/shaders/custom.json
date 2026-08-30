@@ -1,0 +1,12 @@
+{
+  "name": "Custom",
+  "description": "User-defined shader configuration",
+  "saturation": 100,
+  "contrast": 100,
+  "sharpness": 0,
+  "bloom": 0,
+  "hdr": 0,
+  "ambient_light": 0,
+  "vignette": 0,
+  "shadow": 0
+}

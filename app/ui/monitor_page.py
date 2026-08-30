@@ -1,0 +1,628 @@
+"""
+Heaven Society — MONITOR Page
+
+Real-time telemetry dashboard with compact metric cards.
+Only shows metrics actually collected by the backend.
+"""
+
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QGridLayout,
+    QProgressBar, QScrollArea
+)
+from PySide6.QtCore import Qt, QTimer
+
+from app.ui.theme import (
+    BG_PANEL, BORDER_LIGHT, BORDER_MEDIUM,
+    ACCENT_PRIMARY, ACCENT_SUBTLE,
+    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY,
+    STATUS_OK, STATUS_WARN, STATUS_ERROR, STATUS_MUTED,
+    FONT_FAMILY, FONT_MONO,
+    FONT_SIZE_LG, FONT_SIZE_SM, FONT_SIZE_XS,
+    WEIGHT_BOLD, WEIGHT_SEMIBOLD, WEIGHT_MEDIUM,
+    RADIUS_MD, card_style, metric_color, temp_color,
+)
+from app.core.telemetry import telemetry_engine
+from app.utils.logger import get_logger
+
+logger = get_logger("ui.monitor_page")
+
+
+class TelemetryCard(QFrame):
+    """Compact real-time metric card with progress bar."""
+
+    def __init__(self, title: str, unit: str = "%", parent=None):
+        super().__init__(parent)
+        self.setFrameStyle(QFrame.NoFrame)
+        self.setMinimumHeight(72)
+        self.setMaximumHeight(80)
+        self.setStyleSheet(f"""
+            QFrame {{
+                {card_style()}
+            }}
+        """)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(2)
+
+        self.title_label = QLabel(title)
+        self.title_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY};
+            font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS};
+            font-weight: {WEIGHT_SEMIBOLD};
+            letter-spacing: 1px;
+            border: none;
+        """)
+
+        self.value_label = QLabel("--")
+        self.value_label.setStyleSheet(f"""
+            color: {TEXT_PRIMARY};
+            font-family: {FONT_MONO};
+            font-size: {FONT_SIZE_LG};
+            font-weight: {WEIGHT_BOLD};
+            border: none;
+        """)
+        self.value_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        self.unit_label = QLabel(unit)
+        self.unit_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY};
+            font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS};
+            border: none;
+        """)
+
+        layout.addWidget(self.title_label)
+        h = QHBoxLayout()
+        h.setSpacing(3)
+        h.addWidget(self.value_label)
+        h.addWidget(self.unit_label)
+        h.addStretch()
+        layout.addLayout(h)
+
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.setValue(0)
+        self.bar.setFixedHeight(2)
+        self.bar.setTextVisible(False)
+        self.bar.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: {BORDER_LIGHT};
+                border-radius: 1px;
+                border: none;
+            }}
+            QProgressBar::chunk {{
+                background-color: {ACCENT_PRIMARY};
+                border-radius: 1px;
+            }}
+        """)
+        layout.addWidget(self.bar)
+
+    def update_value(self, value: float, color: str = TEXT_PRIMARY):
+        self.value_label.setText(f"{value:.1f}")
+        self.value_label.setStyleSheet(f"""
+            color: {color};
+            font-family: {FONT_MONO};
+            font-size: {FONT_SIZE_LG};
+            font-weight: {WEIGHT_BOLD};
+            border: none;
+        """)
+        self.bar.setValue(int(min(100, max(0, value))))
+
+    def set_na(self):
+        self.value_label.setText("N/A")
+        self.value_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY};
+            font-family: {FONT_MONO};
+            font-size: {FONT_SIZE_SM};
+            font-weight: {WEIGHT_MEDIUM};
+            border: none;
+        """)
+        self.bar.setValue(0)
+
+
+class MonitorPage(QWidget):
+    """Monitor page with real-time telemetry grid."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._cards = {}
+        self._setup_ui()
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._update_telemetry)
+        self._timer.start(1000)
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(10)
+
+        title = QLabel("TELEMETRY")
+        title.setStyleSheet(f"""
+            color: {ACCENT_PRIMARY};
+            font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_SM};
+            font-weight: {WEIGHT_BOLD};
+            letter-spacing: 2px;
+            border: none;
+        """)
+        layout.addWidget(title)
+
+        # System metrics grid
+        sys_grid = QGridLayout()
+        sys_grid.setSpacing(6)
+
+        sys_metrics = [
+            ("CPU", "%"), ("GPU", "%"), ("RAM", "%"), ("VRAM", "%"),
+            ("GPU TEMP", "°C"), ("GPU CLOCK", "MHz"),
+        ]
+        for i, (name, unit) in enumerate(sys_metrics):
+            card = TelemetryCard(name, unit)
+            self._cards[name] = card
+            sys_grid.addWidget(card, i // 3, i % 3)
+
+        layout.addLayout(sys_grid)
+
+        # FPS section
+        fps_label = QLabel("FRAME TELEMETRY")
+        fps_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY};
+            font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS};
+            font-weight: {WEIGHT_BOLD};
+            letter-spacing: 2px;
+            border: none;
+            margin-top: 4px;
+        """)
+        layout.addWidget(fps_label)
+
+        fps_grid = QGridLayout()
+        fps_grid.setSpacing(6)
+
+        fps_metrics = [
+            ("FPS", ""), ("1% LOW", ""), ("0.1% LOW", ""),
+            ("FRAME TIME", "ms"), ("FRAME VARIANCE", "ms²"), ("SPIKES", ""),
+        ]
+        for i, (name, unit) in enumerate(fps_metrics):
+            card = TelemetryCard(name, unit)
+            self._cards[name] = card
+            fps_grid.addWidget(card, i // 3, i % 3)
+
+        layout.addLayout(fps_grid)
+
+        # Responsiveness
+        resp_frame = QFrame()
+        resp_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
+        resp_layout = QVBoxLayout(resp_frame)
+        resp_layout.setContentsMargins(12, 8, 12, 8)
+        resp_layout.setSpacing(3)
+
+        resp_header = QHBoxLayout()
+        resp_title = QLabel("INPUT RESPONSIVENESS")
+        resp_title.setStyleSheet(f"""
+            color: {TEXT_TERTIARY};
+            font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS};
+            font-weight: {WEIGHT_BOLD};
+            letter-spacing: 1px;
+            border: none;
+        """)
+        resp_header.addWidget(resp_title)
+        resp_header.addStretch()
+        self.resp_score_label = QLabel("")
+        self.resp_score_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+            font-weight: {WEIGHT_BOLD}; border: none;
+        """)
+        resp_header.addWidget(self.resp_score_label)
+        resp_layout.addLayout(resp_header)
+
+        # Compact metrics
+        resp_grid = QHBoxLayout()
+        resp_grid.setSpacing(6)
+
+        self.resp_level_label = QLabel("--")
+        self.resp_level_label.setStyleSheet(f"""
+            color: {TEXT_PRIMARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM};
+            font-weight: {WEIGHT_BOLD}; border: none;
+        """)
+        resp_grid.addWidget(self.resp_level_label)
+
+        self.resp_bottleneck_label = QLabel("")
+        self.resp_bottleneck_label.setStyleSheet(f"""
+            color: {TEXT_SECONDARY}; font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS};
+            border: none;
+        """)
+        resp_grid.addWidget(self.resp_bottleneck_label)
+        resp_grid.addStretch()
+
+        resp_layout.addLayout(resp_grid)
+
+        # Recommendation text
+        self.resp_rec_label = QLabel("")
+        self.resp_rec_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS};
+            border: none;
+        """)
+        self.resp_rec_label.setWordWrap(True)
+        resp_layout.addWidget(self.resp_rec_label)
+
+        layout.addWidget(resp_frame)
+
+        # Thermal
+        thermal_frame = QFrame()
+        thermal_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
+        thermal_layout = QVBoxLayout(thermal_frame)
+        thermal_layout.setContentsMargins(12, 8, 12, 8)
+        thermal_layout.setSpacing(3)
+
+        thermal_header = QHBoxLayout()
+        thermal_title = QLabel("THERMAL")
+        thermal_title.setStyleSheet(f"""
+            color: {TEXT_TERTIARY};
+            font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS};
+            font-weight: {WEIGHT_BOLD};
+            letter-spacing: 1px;
+            border: none;
+        """)
+        thermal_header.addWidget(thermal_title)
+        thermal_header.addStretch()
+        self.thermal_state_label = QLabel("")
+        self.thermal_state_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+            font-weight: {WEIGHT_BOLD}; border: none;
+        """)
+        thermal_header.addWidget(self.thermal_state_label)
+        thermal_layout.addLayout(thermal_header)
+
+        # GPU/CPU temps
+        thermal_grid = QHBoxLayout()
+        thermal_grid.setSpacing(6)
+
+        self.thermal_gpu_label = QLabel("GPU TEMP")
+        self.thermal_gpu_label.setStyleSheet(f"color: {TEXT_TERTIARY}; font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS}; border: none;")
+        self.thermal_cpu_label = QLabel("CPU TEMP")
+        self.thermal_cpu_label.setStyleSheet(f"color: {TEXT_TERTIARY}; font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS}; border: none;")
+        self.thermal_throttle_label = QLabel("THROTTLE")
+        self.thermal_throttle_label.setStyleSheet(f"color: {TEXT_TERTIARY}; font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS}; border: none;")
+
+        for lbl in [self.thermal_gpu_label, self.thermal_cpu_label, self.thermal_throttle_label]:
+            thermal_grid.addWidget(lbl)
+        thermal_layout.addLayout(thermal_grid)
+
+        thermal_vals = QHBoxLayout()
+        thermal_vals.setSpacing(6)
+
+        self.thermal_gpu_val = QLabel("--")
+        self.thermal_gpu_val.setStyleSheet(f"color: {TEXT_PRIMARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;")
+        self.thermal_cpu_val = QLabel("--")
+        self.thermal_cpu_val.setStyleSheet(f"color: {TEXT_PRIMARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;")
+        self.thermal_throttle_val = QLabel("--")
+        self.thermal_throttle_val.setStyleSheet(f"color: {TEXT_PRIMARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;")
+
+        for lbl in [self.thermal_gpu_val, self.thermal_cpu_val, self.thermal_throttle_val]:
+            thermal_vals.addWidget(lbl)
+        thermal_layout.addLayout(thermal_vals)
+
+        layout.addWidget(thermal_frame)
+
+        # Bottleneck
+        bn_frame = QFrame()
+        bn_frame.setStyleSheet(f"""
+            QFrame {{
+                {card_style()}
+            }}
+        """)
+        bn_layout = QVBoxLayout(bn_frame)
+        bn_layout.setContentsMargins(12, 8, 12, 8)
+        bn_layout.setSpacing(3)
+
+        bn_header = QLabel("BOTTLENECK")
+        bn_header.setStyleSheet(f"""
+            color: {TEXT_TERTIARY};
+            font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS};
+            font-weight: {WEIGHT_BOLD};
+            letter-spacing: 1px;
+            border: none;
+        """)
+        bn_layout.addWidget(bn_header)
+
+        self.bottleneck_name = QLabel("ANALYZING...")
+        self.bottleneck_name.setStyleSheet(f"""
+            color: {TEXT_PRIMARY};
+            font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_SM};
+            font-weight: {WEIGHT_BOLD};
+            border: none;
+        """)
+        bn_layout.addWidget(self.bottleneck_name)
+
+        self.bottleneck_detail = QLabel("")
+        self.bottleneck_detail.setStyleSheet(f"""
+            color: {TEXT_SECONDARY};
+            font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS};
+            border: none;
+        """)
+        bn_layout.addWidget(self.bottleneck_detail)
+
+        layout.addWidget(bn_frame)
+        layout.addStretch()
+
+    def refresh(self):
+        self._update_telemetry()
+
+    def _update_telemetry(self):
+        try:
+            frame = telemetry_engine.current
+
+            # CPU
+            if frame.cpu_utilization > 0:
+                self._cards["CPU"].update_value(
+                    frame.cpu_utilization, metric_color(frame.cpu_utilization)
+                )
+            else:
+                self._cards["CPU"].set_na()
+
+            # GPU
+            if frame.gpu_utilization > 0:
+                self._cards["GPU"].update_value(
+                    frame.gpu_utilization, metric_color(frame.gpu_utilization)
+                )
+            else:
+                self._cards["GPU"].set_na()
+
+            # RAM
+            if frame.ram_percent > 0:
+                self._cards["RAM"].update_value(
+                    frame.ram_percent, metric_color(frame.ram_percent)
+                )
+            else:
+                self._cards["RAM"].set_na()
+
+            # VRAM
+            if frame.gpu_memory_total_mb > 0:
+                vram_pct = (frame.gpu_memory_used_mb / frame.gpu_memory_total_mb) * 100
+                self._cards["VRAM"].update_value(vram_pct, metric_color(vram_pct))
+            else:
+                self._cards["VRAM"].set_na()
+
+            # GPU Temp
+            if frame.gpu_temp is not None and frame.gpu_temp > 0:
+                self._cards["GPU TEMP"].update_value(
+                    frame.gpu_temp, temp_color(frame.gpu_temp)
+                )
+            else:
+                self._cards["GPU TEMP"].set_na()
+
+            # GPU Clock
+            if frame.gpu_clock_mhz and frame.gpu_clock_mhz > 0:
+                self._cards["GPU CLOCK"].update_value(
+                    frame.gpu_clock_mhz, TEXT_PRIMARY
+                )
+            else:
+                self._cards["GPU CLOCK"].set_na()
+
+            # FPS — PresentMon only
+            try:
+                from app.performance.presentmon_provider import PresentMonProvider
+                pm = PresentMonProvider()
+                metrics = pm.get_metrics()
+                if metrics.available and metrics.sample_count > 10:
+                    self._cards["FPS"].update_value(
+                        metrics.avg_fps, metric_color(metrics.avg_fps)
+                    )
+                    self._cards["1% LOW"].update_value(
+                        metrics.one_percent_low, metric_color(metrics.one_percent_low)
+                    )
+                    self._cards["0.1% LOW"].update_value(
+                        metrics.point_one_percent_low,
+                        metric_color(metrics.point_one_percent_low),
+                    )
+                    self._cards["FRAME TIME"].update_value(
+                        metrics.avg_frame_time_ms, TEXT_PRIMARY
+                    )
+                    self._cards["FRAME VARIANCE"].update_value(
+                        metrics.frame_time_variance, TEXT_PRIMARY
+                    )
+                    self._cards["SPIKES"].update_value(
+                        metrics.frame_spikes,
+                        STATUS_ERROR if metrics.frame_spikes > 20 else TEXT_PRIMARY,
+                    )
+                else:
+                    self._cards["FPS"].set_na()
+                    self._cards["1% LOW"].set_na()
+                    self._cards["0.1% LOW"].set_na()
+                    self._cards["FRAME TIME"].set_na()
+                    self._cards["FRAME VARIANCE"].set_na()
+                    self._cards["SPIKES"].set_na()
+            except Exception:
+                self._cards["FPS"].set_na()
+                self._cards["1% LOW"].set_na()
+                self._cards["0.1% LOW"].set_na()
+                self._cards["FRAME TIME"].set_na()
+                self._cards["FRAME VARIANCE"].set_na()
+                self._cards["SPIKES"].set_na()
+
+            # Bottleneck
+            from app.core.analyzer import bottleneck_analyzer
+            analysis = bottleneck_analyzer.analyze(frame)
+            if analysis.primary_bottleneck:
+                bn = analysis.primary_bottleneck
+                self.bottleneck_name.setText(bn.name.upper())
+                if bn.severity in ("HIGH", "CRITICAL"):
+                    color = STATUS_ERROR
+                elif bn.severity == "MEDIUM":
+                    color = STATUS_WARN
+                else:
+                    color = STATUS_OK
+                self.bottleneck_name.setStyleSheet(f"""
+                    color: {color};
+                    font-family: {FONT_FAMILY};
+                    font-size: {FONT_SIZE_SM};
+                    font-weight: {WEIGHT_BOLD};
+                    border: none;
+                """)
+                self.bottleneck_detail.setText(
+                    f"{bn.confidence * 100:.0f}% confidence — {bn.description}"
+                )
+            else:
+                self.bottleneck_name.setText("NO BOTTLENECK")
+                self.bottleneck_name.setStyleSheet(f"""
+                    color: {STATUS_OK};
+                    font-family: {FONT_FAMILY};
+                    font-size: {FONT_SIZE_SM};
+                    font-weight: {WEIGHT_BOLD};
+                    border: none;
+                """)
+                self.bottleneck_detail.setText("System appears balanced")
+
+            # Responsiveness
+            self._update_responsiveness()
+
+            # Thermal
+            self._update_thermal()
+
+        except Exception as e:
+            logger.debug(f"Monitor update: {e}")
+
+    def _update_responsiveness(self):
+        """Update the input responsiveness section."""
+        try:
+            from app.performance.input_latency import input_latency_analyzer, ResponsivenessLevel
+
+            report = input_latency_analyzer.analyze()
+
+            # Score
+            score = report.responsiveness_score
+            score_color = STATUS_OK
+            if score < 50:
+                score_color = STATUS_ERROR
+            elif score < 70:
+                score_color = STATUS_WARN
+            self.resp_score_label.setText(f"{score:.0f}/100")
+            self.resp_score_label.setStyleSheet(f"""
+                color: {score_color}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+                font-weight: {WEIGHT_BOLD}; border: none;
+            """)
+
+            # Level
+            level = report.responsiveness_level
+            level_colors = {
+                ResponsivenessLevel.EXCELLENT: STATUS_OK,
+                ResponsivenessLevel.GOOD: STATUS_OK,
+                ResponsivenessLevel.MODERATE: STATUS_WARN,
+                ResponsivenessLevel.POOR: STATUS_ERROR,
+                ResponsivenessLevel.CRITICAL: STATUS_ERROR,
+                ResponsivenessLevel.INSUFFICIENT_DATA: STATUS_MUTED,
+            }
+            color = level_colors.get(level, TEXT_TERTIARY)
+            self.resp_level_label.setText(level.value)
+            self.resp_level_label.setStyleSheet(f"""
+                color: {color}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM};
+                font-weight: {WEIGHT_BOLD}; border: none;
+            """)
+
+            # Bottleneck
+            bn_type = report.identified_bottleneck.value
+            bn_conf = report.bottleneck_confidence * 100
+            self.resp_bottleneck_label.setText(f"Bottleneck: {bn_type} ({bn_conf:.0f}%)")
+
+            # Top recommendation
+            if report.recommendations:
+                self.resp_rec_label.setText(report.recommendations[0])
+            else:
+                self.resp_rec_label.setText("No configuration changes needed")
+
+        except Exception as e:
+            logger.debug(f"Responsiveness update: {e}")
+
+    def _update_thermal(self):
+        """Update the thermal status section."""
+        try:
+            from app.system.thermal_monitor import (
+                thermal_diagnostics, ThermalState, ThrottleIndicator,
+            )
+
+            diag = thermal_diagnostics.diagnose()
+
+            # Thermal state
+            state_colors = {
+                ThermalState.NORMAL: STATUS_OK,
+                ThermalState.WARM: STATUS_WARN,
+                ThermalState.HOT: STATUS_ERROR,
+                ThermalState.THROTTLING_RISK: STATUS_ERROR,
+                ThermalState.UNKNOWN: STATUS_MUTED,
+            }
+            color = state_colors.get(diag.thermal_state, TEXT_TERTIARY)
+            self.thermal_state_label.setText(diag.thermal_state.value)
+            self.thermal_state_label.setStyleSheet(f"""
+                color: {color}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+                font-weight: {WEIGHT_BOLD}; border: none;
+            """)
+
+            # GPU temp
+            if diag.gpu.temperature_celsius is not None:
+                temp = diag.gpu.temperature_celsius
+                if temp >= 90:
+                    t_color = STATUS_ERROR
+                elif temp >= 75:
+                    t_color = STATUS_WARN
+                else:
+                    t_color = TEXT_PRIMARY
+                self.thermal_gpu_val.setText(f"{temp:.0f}°C")
+                self.thermal_gpu_val.setStyleSheet(f"""
+                    color: {t_color}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM};
+                    font-weight: {WEIGHT_BOLD}; border: none;
+                """)
+            else:
+                self.thermal_gpu_val.setText("N/A")
+                self.thermal_gpu_val.setStyleSheet(f"""
+                    color: {TEXT_TERTIARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM};
+                    border: none;
+                """)
+
+            # CPU temp
+            if diag.cpu.temperature_celsius is not None:
+                temp = diag.cpu.temperature_celsius
+                if temp >= 90:
+                    t_color = STATUS_ERROR
+                elif temp >= 70:
+                    t_color = STATUS_WARN
+                else:
+                    t_color = TEXT_PRIMARY
+                self.thermal_cpu_val.setText(f"{temp:.0f}°C")
+                self.thermal_cpu_val.setStyleSheet(f"""
+                    color: {t_color}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM};
+                    font-weight: {WEIGHT_BOLD}; border: none;
+                """)
+            else:
+                self.thermal_cpu_val.setText("N/A")
+                self.thermal_cpu_val.setStyleSheet(f"""
+                    color: {TEXT_TERTIARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM};
+                    border: none;
+                """)
+
+            # Throttle indicators
+            has_throttle = any(
+                ind != ThrottleIndicator.NONE
+                for ind in diag.throttle_indicators
+            )
+            if has_throttle:
+                count = sum(1 for ind in diag.throttle_indicators if ind != ThrottleIndicator.NONE)
+                self.thermal_throttle_val.setText(f"{count} active")
+                self.thermal_throttle_val.setStyleSheet(f"""
+                    color: {STATUS_ERROR}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM};
+                    font-weight: {WEIGHT_BOLD}; border: none;
+                """)
+            else:
+                self.thermal_throttle_val.setText("None")
+                self.thermal_throttle_val.setStyleSheet(f"""
+                    color: {STATUS_OK}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM};
+                    font-weight: {WEIGHT_BOLD}; border: none;
+                """)
+
+        except Exception as e:
+            logger.debug(f"Thermal update: {e}")

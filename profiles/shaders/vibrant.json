@@ -1,0 +1,12 @@
+{
+  "name": "Vibrant",
+  "description": "Enhanced color saturation and contrast for vivid visuals",
+  "saturation": 132,
+  "contrast": 108,
+  "sharpness": 39,
+  "bloom": 6,
+  "hdr": 30,
+  "ambient_light": 20,
+  "vignette": 60,
+  "shadow": 10
+}
