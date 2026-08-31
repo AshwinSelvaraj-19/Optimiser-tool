@@ -3803,6 +3803,86 @@ def main():
         print("=" * 55)
         return 0
 
+    if "--session-start" in sys.argv:
+        from app.performance.gaming_session_analyzer import gaming_session_analyzer
+        from app.core.emulator_controller import emulator_controller
+
+        target = emulator_controller.detect_target()
+        t_name = target.name if target else ""
+        t_pid = target.pid if target else 0
+
+        session_id = gaming_session_analyzer.start_session(
+            target_name=t_name, target_pid=t_pid,
+        )
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — GAMING SESSION STARTED")
+        print("=" * 55)
+        print(f"\n  Session:  {session_id}")
+        print(f"  Target:   {t_name or 'None'} PID {t_pid}")
+        print(f"\n  Session is now running.")
+        print(f"  Use --session-status to check progress.")
+        print(f"  Use --session-stop to end and generate report.")
+        print("\n" + "=" * 55)
+        return 0
+
+    if "--session-status" in sys.argv:
+        from app.performance.gaming_session_analyzer import gaming_session_analyzer
+        status = gaming_session_analyzer.get_session_status()
+        print(gaming_session_analyzer.format_status(status))
+        return 0
+
+    if "--session-stop" in sys.argv:
+        from app.performance.gaming_session_analyzer import gaming_session_analyzer
+        from app.core.emulator_controller import emulator_controller
+        import time as _time
+
+        duration = 30
+        for i, arg in enumerate(sys.argv):
+            if arg == "--duration" and i + 1 < len(sys.argv):
+                try:
+                    duration = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+
+        # Auto-start if no session running
+        if not gaming_session_analyzer.is_running:
+            target = emulator_controller.detect_target()
+            t_name = target.name if target else ""
+            t_pid = target.pid if target else 0
+            gaming_session_analyzer.start_session(t_name, t_pid)
+            print(f"Auto-started session: {gaming_session_analyzer.session_id}")
+
+        # Collect telemetry samples during the session
+        from app.performance.realtime_telemetry import realtime_telemetry
+
+        telemetry = realtime_telemetry
+        if not telemetry.is_running:
+            telemetry.start_session(
+                gaming_session_analyzer._target_name,
+                gaming_session_analyzer._target_pid,
+            )
+
+        print(f"Collecting {duration}s of telemetry...")
+        try:
+            for _ in range(duration):
+                _time.sleep(1)
+                sample = telemetry.latest_snapshot()
+                if sample:
+                    gaming_session_analyzer.ingest_sample(sample)
+        except KeyboardInterrupt:
+            pass
+
+        if telemetry.is_running:
+            telemetry.stop_session()
+
+        report = gaming_session_analyzer.stop_session()
+        if report:
+            print(gaming_session_analyzer.format_report(report))
+        else:
+            print("No session to stop.")
+        return 0
+
     if "--final-validation" in sys.argv:
         from app.core.validation_engine import run_final_validation
 

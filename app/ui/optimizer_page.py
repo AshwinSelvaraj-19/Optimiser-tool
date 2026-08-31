@@ -981,6 +981,39 @@ class OptimizerPage(QWidget):
 
         layout.addWidget(self.resp_frame)
 
+        # ── GAMING SESSION ──
+        self.gaming_session_frame = QFrame()
+        self.gaming_session_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
+        gs_layout = QVBoxLayout(self.gaming_session_frame)
+        gs_layout.setContentsMargins(12, 8, 12, 8)
+        gs_layout.setSpacing(3)
+
+        gs_header = QHBoxLayout()
+        gs_title = QLabel("GAMING SESSION")
+        gs_title.setStyleSheet(f"""
+            color: {TEXT_PRIMARY}; font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
+        """)
+        gs_header.addWidget(gs_title)
+        gs_header.addStretch()
+        self.gs_state_label = QLabel("")
+        self.gs_state_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_MONO};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        gs_header.addWidget(self.gs_state_label)
+        gs_layout.addLayout(gs_header)
+
+        self.gs_detail_label = QLabel("No active session")
+        self.gs_detail_label.setWordWrap(True)
+        self.gs_detail_label.setStyleSheet(f"""
+            color: {TEXT_SECONDARY}; font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        gs_layout.addWidget(self.gs_detail_label)
+
+        layout.addWidget(self.gaming_session_frame)
+
         # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
@@ -1102,6 +1135,7 @@ class OptimizerPage(QWidget):
         self._load_input_status()
         self._load_responsiveness_status()
         self._load_opt_session_status()
+        self._load_gaming_session_status()
 
     def _load_status(self):
         """Load current optimization status with live target detection."""
@@ -2344,6 +2378,27 @@ class OptimizerPage(QWidget):
 
         except Exception as e:
             logger.debug(f"Responsiveness status load: {e}")
+
+    def _load_gaming_session_status(self):
+        """Load gaming session status for the UI."""
+        try:
+            from app.performance.gaming_session_analyzer import gaming_session_analyzer
+            status = gaming_session_analyzer.get_session_status()
+
+            state = status.get("state", "IDLE")
+            self.gs_state_label.setText(state)
+
+            detail = f"Target: {status.get('target_name') or 'None'} PID {status.get('target_pid', 0)}"
+            detail += f"  |  Duration: {status.get('duration_seconds', 0):.0f}s"
+            detail += f"  |  Samples: {status.get('sample_count', 0)}  Events: {status.get('event_count', 0)}"
+
+            if status.get("last_report_score") is not None:
+                detail += f"  |  Score: {status['last_report_score']}/100 ({status.get('last_report_root_cause', 'N/A')})"
+
+            self.gs_detail_label.setText(detail)
+
+        except Exception as e:
+            logger.debug(f"Gaming session status load: {e}")
 
     def _load_opt_session_status(self):
         """Load optimization session status for the UI."""
