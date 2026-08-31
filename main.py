@@ -3677,6 +3677,132 @@ def main():
         print(f"Report saved: {report_path}")
         return 0
 
+    if "--optimization-status" in sys.argv:
+        from app.core.optimization_executor import optimization_executor
+        status = optimization_executor.get_status()
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — OPTIMIZATION STATUS")
+        print("=" * 55)
+
+        print(f"\n  Busy: {status['busy']}")
+        print(f"  Session History: {status['history_count']}")
+
+        if status["last_session"]:
+            ls = status["last_session"]
+            print(f"\nLAST SESSION")
+            print(f"  ID:          {ls['session_id']}")
+            print(f"  Profile:     {ls['profile_name'] or ls['profile_id']}")
+            print(f"  Target:      {ls['target_name'] or 'None'} PID {ls['target_pid']}")
+            print(f"  Status:      {ls['status']}")
+            print(f"  Duration:    {ls['duration_seconds']:.1f}s")
+            print(f"  Applied:     {ls['applied_count']}")
+            print(f"  Kept:        {ls['kept_count']}")
+            print(f"  Rolled Back: {ls['rolled_back_count']}")
+            print(f"  Failed:      {ls['failed_count']}")
+            print(f"  Admin Req:   {ls['admin_required_count']}")
+            print(f"  Optimal:     {ls['already_optimal_count']}")
+            print(f"  Recommend:   {ls['recommendation_only_count']}")
+        else:
+            print(f"\n  No session recorded.")
+
+        print("\n" + "=" * 55)
+        print("STATUS COMPLETE")
+        print("=" * 55)
+        return 0
+
+    if "--optimize-preview" in sys.argv:
+        from app.core.optimization_executor import optimization_executor
+        profile_id = "gaming"
+        for i, arg in enumerate(sys.argv):
+            if arg == "--profile" and i + 1 < len(sys.argv):
+                profile_id = sys.argv[i + 1]
+
+        session = optimization_executor.preview(profile_id=profile_id)
+        print(optimization_executor.format_preview(session))
+        return 0
+
+    if "--optimize-auto" in sys.argv:
+        from app.core.optimization_executor import optimization_executor
+        profile_id = "gaming"
+        for i, arg in enumerate(sys.argv):
+            if arg == "--profile" and i + 1 < len(sys.argv):
+                profile_id = sys.argv[i + 1]
+
+        # Detect thermal state
+        thermal_state = "UNKNOWN"
+        try:
+            from app.system.gpu import gpu_monitor
+            gpus = gpu_monitor.detect()
+            if gpus and gpus[0].vendor == "NVIDIA":
+                g = gpu_monitor.update_nvidia(gpus[0])
+                if g.temperature_celsius:
+                    if g.temperature_celsius >= 90:
+                        thermal_state = "THROTTLING_RISK"
+                    elif g.temperature_celsius >= 80:
+                        thermal_state = "HOT"
+                    elif g.temperature_celsius >= 70:
+                        thermal_state = "WARM"
+                    else:
+                        thermal_state = "NORMAL"
+        except Exception:
+            pass
+
+        session = optimization_executor.execute(
+            profile_id=profile_id,
+            thermal_state=thermal_state,
+        )
+        print(session.format_cli())
+        return 0
+
+    if "--optimize-verify" in sys.argv:
+        from app.core.optimization_executor import optimization_executor
+        result = optimization_executor.verify_session()
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — OPTIMIZATION VERIFICATION")
+        print("=" * 55)
+
+        print(f"\n  Status: {result['status']}")
+        if "session_status" in result:
+            print(f"  Session: {result['session_status']}")
+
+        if "results" in result:
+            print(f"\n  OPTIMIZATIONS")
+            print("-" * 55)
+            for opt_id, info in result["results"].items():
+                icon = "[OK]" if info["verified"] else "[XX]"
+                print(f"  {icon} {info['name']}: {info['status']}")
+
+        print("\n" + "=" * 55)
+        print("VERIFICATION COMPLETE")
+        print("=" * 55)
+        return 0
+
+    if "--optimize-rollback" in sys.argv:
+        from app.core.optimization_executor import optimization_executor
+        result = optimization_executor.rollback_last()
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — OPTIMIZATION ROLLBACK")
+        print("=" * 55)
+
+        print(f"\n  Success: {result.success}")
+        print(f"  Message: {result.message}")
+        if result.restored_entries:
+            print(f"\n  RESTORED")
+            for entry in result.restored_entries:
+                print(f"    [OK] {entry}")
+        if result.failed_entries:
+            print(f"\n  FAILED")
+            for entry in result.failed_entries:
+                print(f"    [XX] {entry}")
+
+        print("\n" + "=" * 55)
+        print("ROLLBACK COMPLETE")
+        print("=" * 55)
+        return 0
+
     if "--final-validation" in sys.argv:
         from app.core.validation_engine import run_final_validation
 

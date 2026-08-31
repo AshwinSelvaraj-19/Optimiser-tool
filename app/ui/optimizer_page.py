@@ -860,6 +860,39 @@ class OptimizerPage(QWidget):
 
         layout.addWidget(self.adaptive_frame)
 
+        # ── OPTIMIZATION SESSION ──
+        self.opt_session_frame = QFrame()
+        self.opt_session_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
+        sess_layout = QVBoxLayout(self.opt_session_frame)
+        sess_layout.setContentsMargins(12, 8, 12, 8)
+        sess_layout.setSpacing(3)
+
+        sess_header = QHBoxLayout()
+        sess_title = QLabel("OPTIMIZATION SESSION")
+        sess_title.setStyleSheet(f"""
+            color: {TEXT_PRIMARY}; font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
+        """)
+        sess_header.addWidget(sess_title)
+        sess_header.addStretch()
+        self.opt_session_status_label = QLabel("")
+        self.opt_session_status_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_MONO};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        sess_header.addWidget(self.opt_session_status_label)
+        sess_layout.addLayout(sess_header)
+
+        self.opt_session_detail_label = QLabel("No active session")
+        self.opt_session_detail_label.setWordWrap(True)
+        self.opt_session_detail_label.setStyleSheet(f"""
+            color: {TEXT_SECONDARY}; font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        sess_layout.addWidget(self.opt_session_detail_label)
+
+        layout.addWidget(self.opt_session_frame)
+
         # ── INPUT & GAMEPLAY ──
         self.input_frame = QFrame()
         self.input_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
@@ -1068,6 +1101,7 @@ class OptimizerPage(QWidget):
         self._load_adaptive_status()
         self._load_input_status()
         self._load_responsiveness_status()
+        self._load_opt_session_status()
 
     def _load_status(self):
         """Load current optimization status with live target detection."""
@@ -2310,6 +2344,31 @@ class OptimizerPage(QWidget):
 
         except Exception as e:
             logger.debug(f"Responsiveness status load: {e}")
+
+    def _load_opt_session_status(self):
+        """Load optimization session status for the UI."""
+        try:
+            from app.core.optimization_executor import optimization_executor
+            status = optimization_executor.get_status()
+
+            if not status.get("last_session"):
+                self.opt_session_status_label.setText("")
+                self.opt_session_detail_label.setText("No session recorded")
+                return
+
+            ls = status["last_session"]
+            state = ls.get("status", "UNKNOWN")
+            self.opt_session_status_label.setText(state)
+
+            detail = f"Profile: {ls.get('profile_name') or ls.get('profile_id', '?')}"
+            detail += f"  |  Target: {ls.get('target_name') or 'None'} PID {ls.get('target_pid', 0)}"
+            detail += f"  |  Kept: {ls.get('kept_count', 0)}  Rolled Back: {ls.get('rolled_back_count', 0)}"
+            detail += f"  |  Duration: {ls.get('duration_seconds', 0):.1f}s"
+
+            self.opt_session_detail_label.setText(detail)
+
+        except Exception as e:
+            logger.debug(f"Opt session status load: {e}")
 
     def _log(self, msg):
         self.log_text.append(msg)
