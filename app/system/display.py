@@ -3,6 +3,7 @@ Display detection and configuration module.
 Monitors display resolution, refresh rate, and multi-monitor setups.
 """
 
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -73,6 +74,11 @@ class DisplayMonitor:
         try:
             import pythoncom
             pythoncom.CoInitialize()
+            # Suppress harmless pywin32 IUnknown::Release() SEH exceptions
+            # These are C-level stderr writes during COM object teardown
+            _devnull_fd = os.open(os.devnull, os.O_WRONLY)
+            _old_stderr_fd = os.dup(2)
+            os.dup2(_devnull_fd, 2)
             try:
                 import wmi
                 w = wmi.WMI(namespace="root\\cimv2")
@@ -105,8 +111,12 @@ class DisplayMonitor:
                             d["driver"] = driver_ver
                     except Exception:
                         continue
+                del w
             finally:
                 pythoncom.CoUninitialize()
+                os.dup2(_old_stderr_fd, 2)
+                os.close(_old_stderr_fd)
+                os.close(_devnull_fd)
 
         except ImportError:
             logger.debug("WMI or pythoncom not available for display detection")

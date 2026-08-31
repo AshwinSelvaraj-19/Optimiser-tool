@@ -3,6 +3,8 @@ Hardware scanner — full system hardware detection.
 Combines CPU, GPU, memory, display, storage, and network detection.
 """
 
+import os
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -78,16 +80,46 @@ class HardwareScanner:
         self._profile: Optional[SystemProfile] = None
         self._last_scan: float = 0
         self._scan_interval: float = 300  # Re-scan hardware every 5 minutes
+        self._lock = threading.Lock()
 
     def scan(self, force: bool = False) -> SystemProfile:
         """Perform a full hardware scan. Returns SystemProfile."""
+        # Fast path: return cached profile if still valid
         now = time.time()
         if not force and self._profile and (now - self._last_scan) < self._scan_interval:
             return self._profile
 
+        with self._lock:
+            # Double-check after acquiring lock (another thread may have scanned)
+            now = time.time()
+            if not force and self._profile and (now - self._last_scan) < self._scan_interval:
+                return self._profile
+
+            # Suppress harmless pywin32 IUnknown::Release() SEH exceptions
+            # that print to C-level stderr during deferred COM object teardown
+            _devnull_fd = os.open(os.devnull, os.O_WRONLY)
+            _old_stderr_fd = os.dup(2)
+            os.dup2(_devnull_fd, 2)
+            try:
+                profile = SystemProfile()
+                self._do_scan(profile, now)
+            finally:
+                os.dup2(_old_stderr_fd, 2)
+                os.close(_old_stderr_fd)
+                os.close(_devnull_fd)
+
+            self._profile = profile
+            self._last_scan = now
+
+            logger.info("Hardware scan complete")
+            self._log_summary(profile)
+
+            return profile
+
+    def _do_scan(self, profile: SystemProfile, now: float):
+        """Perform the actual hardware detection (called inside scan lock)."""
         logger.info("Starting full hardware scan...")
         with LogContext(logger, "Hardware Scan"):
-            profile = SystemProfile()
             profile.scan_timestamp = now
 
             # CPU
@@ -134,14 +166,6 @@ class HardwareScanner:
                 profile.hostname = platform.node()
             except Exception as e:
                 logger.error(f"OS info failed: {e}")
-
-        self._profile = profile
-        self._last_scan = now
-
-        logger.info("Hardware scan complete")
-        self._log_summary(profile)
-
-        return profile
 
     def _scan_storage(self) -> list:
         """Detect storage devices."""

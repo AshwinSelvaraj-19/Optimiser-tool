@@ -2310,7 +2310,7 @@ class OptimizerPage(QWidget):
             epp = "ON" if pc.enhance_pointer_precision else "OFF"
             detail = f"Pointer Accel: {epp}"
             if input_session.polling and input_session.polling.observed_rate_hz > 0:
-                detail += f"  |  Rate: {input_session.polling.observed_rate_hz:.0f}Hz ({input_session.polling.consistency.value})")
+                detail += f"  |  Rate: {input_session.polling.observed_rate_hz:.0f}Hz ({input_session.polling.consistency.value})"
             self.input_detail_label.setText(detail)
 
             # Top recommendation

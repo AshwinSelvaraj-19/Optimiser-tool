@@ -3922,11 +3922,11 @@ def main():
     else:
         logger.info("Running as standard user — some optimizations limited")
 
-    from app.core.telemetry import telemetry_engine
-    telemetry_engine.start()
-
     from app.core.scanner import hardware_scanner
     hardware_scanner.scan(force=True)
+
+    from app.core.telemetry import telemetry_engine
+    telemetry_engine.start()
 
     from app.emulator.detector import emulator_detector
     emulators = emulator_detector.detect_all()
