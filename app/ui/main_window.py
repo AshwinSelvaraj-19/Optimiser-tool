@@ -41,11 +41,11 @@ logger = get_logger("ui.main_window")
 # ── Panel mode constants ──────────────────────────────────────────
 
 PANEL_W = 480
-PANEL_H = 700
+PANEL_H = 640
 PANEL_MIN_W = 400
 PANEL_MIN_H = 500
 PANEL_MAX_W = 520
-PANEL_MAX_H = 850
+PANEL_MAX_H = 800
 
 # ── Normal mode constants ─────────────────────────────────────────
 

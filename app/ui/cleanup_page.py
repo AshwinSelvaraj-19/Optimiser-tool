@@ -19,6 +19,7 @@ from app.ui.theme import (
     FONT_SIZE_SM, FONT_SIZE_XS,
     WEIGHT_BOLD, WEIGHT_SEMIBOLD, WEIGHT_MEDIUM,
     RADIUS_MD, card_style, button_primary_style, button_secondary_style,
+    section_header_style,
 )
 from app.utils.logger import get_logger
 
@@ -225,14 +226,7 @@ class CleanupPage(QWidget):
         summary_layout.setSpacing(4)
 
         summary_title = QLabel("SYSTEM CLEANUP")
-        summary_title.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 1px;
-            border: none;
-        """)
+        summary_title.setStyleSheet(section_header_style())
         summary_layout.addWidget(summary_title)
 
         self.summary_text = QLabel("Scan to detect cleanup targets...")
@@ -266,14 +260,7 @@ class CleanupPage(QWidget):
 
         disk_header = QHBoxLayout()
         disk_title = QLabel("DISK STATUS")
-        disk_title.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 1px;
-            border: none;
-        """)
+        disk_title.setStyleSheet(section_header_style())
         disk_header.addWidget(disk_title)
         disk_header.addStretch()
         self.disk_pressure_label = QLabel("")

@@ -19,6 +19,7 @@ from app.ui.theme import (
     FONT_SIZE_SM, FONT_SIZE_XS, FONT_SIZE_MD,
     WEIGHT_BOLD, WEIGHT_SEMIBOLD, WEIGHT_MEDIUM,
     RADIUS_MD, card_style, button_primary_style, button_secondary_style,
+    card_title_style,
 )
 from app.utils.logger import get_logger
 
@@ -111,13 +112,7 @@ class ToolsPage(QWidget):
 
         bench_header = QHBoxLayout()
         bench_title = QLabel("BENCHMARK")
-        bench_title.setStyleSheet(f"""
-            color: {TEXT_PRIMARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_SM};
-            font-weight: {WEIGHT_BOLD};
-            border: none;
-        """)
+        bench_title.setStyleSheet(card_title_style())
         bench_header.addWidget(bench_title)
         bench_header.addStretch()
 
@@ -171,13 +166,7 @@ class ToolsPage(QWidget):
 
         diag_header = QHBoxLayout()
         diag_title = QLabel("DIAGNOSTIC")
-        diag_title.setStyleSheet(f"""
-            color: {TEXT_PRIMARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_SM};
-            font-weight: {WEIGHT_BOLD};
-            border: none;
-        """)
+        diag_title.setStyleSheet(card_title_style())
         diag_header.addWidget(diag_title)
         diag_header.addStretch()
 

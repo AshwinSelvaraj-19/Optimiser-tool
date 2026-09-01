@@ -491,9 +491,21 @@ class HomePage(QWidget):
             logger.debug(f"Storage apply: {e}")
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(12)
+        # Wrap in scroll area for compact panel compatibility
+        from PySide6.QtWidgets import QScrollArea as _SA
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = _SA()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
+        scroll_content = QWidget()
+        layout = QVBoxLayout(scroll_content)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
+        scroll.setWidget(scroll_content)
+        outer.addWidget(scroll)
 
         # ── Section: TARGET ──────────────────────────────────
         section_target = QLabel("TARGET")
@@ -716,14 +728,14 @@ class HomePage(QWidget):
         actions_layout.setSpacing(8)
 
         self.optimize_btn = QPushButton("OPTIMIZE")
-        self.optimize_btn.setFixedHeight(36)
+        self.optimize_btn.setFixedHeight(28)
         self.optimize_btn.setCursor(Qt.PointingHandCursor)
         self.optimize_btn.setStyleSheet(button_primary_style())
         self.optimize_btn.clicked.connect(lambda: self.navigate_to.emit("optimize"))
         actions_layout.addWidget(self.optimize_btn)
 
         self.benchmark_btn = QPushButton("BENCHMARK")
-        self.benchmark_btn.setFixedHeight(36)
+        self.benchmark_btn.setFixedHeight(28)
         self.benchmark_btn.setCursor(Qt.PointingHandCursor)
         self.benchmark_btn.setStyleSheet(button_secondary_style())
         self.benchmark_btn.clicked.connect(lambda: self.navigate_to.emit("tools"))
@@ -731,7 +743,7 @@ class HomePage(QWidget):
         self._hidden_widgets.append(self.benchmark_btn)
 
         self.diagnostic_btn = QPushButton("DIAGNOSTIC")
-        self.diagnostic_btn.setFixedHeight(36)
+        self.diagnostic_btn.setFixedHeight(28)
         self.diagnostic_btn.setCursor(Qt.PointingHandCursor)
         self.diagnostic_btn.setStyleSheet(button_secondary_style())
         self.diagnostic_btn.clicked.connect(lambda: self.navigate_to.emit("tools"))

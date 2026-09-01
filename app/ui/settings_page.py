@@ -20,6 +20,7 @@ from app.ui.theme import (
     FONT_SIZE_SM, FONT_SIZE_XS, FONT_SIZE_MD,
     WEIGHT_BOLD, WEIGHT_SEMIBOLD, WEIGHT_MEDIUM,
     RADIUS_MD, card_style, button_secondary_style,
+    card_title_style, section_header_style,
 )
 from app.core.snapshot import snapshot_manager
 from app.core.rollback import rollback_engine
@@ -53,14 +54,7 @@ class SettingsPage(QWidget):
         outer.addWidget(scroll)
 
         title = QLabel("SETTINGS")
-        title.setStyleSheet(f"""
-            color: {ACCENT_PRIMARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_SM};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 2px;
-            border: none;
-        """)
+        title.setStyleSheet(section_header_style())
         layout.addWidget(title)
 
         # ── Snapshots ────────────────────────────────────────
@@ -76,13 +70,7 @@ class SettingsPage(QWidget):
 
         snap_header = QHBoxLayout()
         snap_title = QLabel("SNAPSHOTS")
-        snap_title.setStyleSheet(f"""
-            color: {TEXT_PRIMARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_SM};
-            font-weight: {WEIGHT_BOLD};
-            border: none;
-        """)
+        snap_title.setStyleSheet(card_title_style())
         snap_header.addWidget(snap_title)
         snap_header.addStretch()
 
@@ -141,13 +129,7 @@ class SettingsPage(QWidget):
         pm_layout.setSpacing(4)
 
         pm_title = QLabel("PRESENTMON")
-        pm_title.setStyleSheet(f"""
-            color: {TEXT_PRIMARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_SM};
-            font-weight: {WEIGHT_BOLD};
-            border: none;
-        """)
+        pm_title.setStyleSheet(card_title_style())
         pm_layout.addWidget(pm_title)
 
         self.pm_info = QLabel("Checking...")
@@ -173,14 +155,7 @@ class SettingsPage(QWidget):
         about_layout.setSpacing(4)
 
         about_title = QLabel("HEAVEN SOCIETY")
-        about_title.setStyleSheet(f"""
-            color: {ACCENT_PRIMARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_SM};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 2px;
-            border: none;
-        """)
+        about_title.setStyleSheet(section_header_style())
         about_layout.addWidget(about_title)
 
         about_text = QLabel(
