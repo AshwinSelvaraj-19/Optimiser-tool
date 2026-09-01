@@ -31,15 +31,15 @@ logger = get_logger("ui.main_window")
 
 # ── Sizing constants ──────────────────────────────────────────────
 
-PANEL_WIDTH = 460
-PANEL_HEIGHT = 660
-PANEL_MIN_W = 380
+PANEL_WIDTH = 900
+PANEL_HEIGHT = 650
+PANEL_MIN_W = 480
 PANEL_MIN_H = 500
-PANEL_MAX_W = 600
-PANEL_MAX_H = 900
+PANEL_MAX_W = 1200
+PANEL_MAX_H = 1000
 
 HEADER_H = 38
-SIDEBAR_W = 54
+SIDEBAR_W = 50
 
 # ── Navigation items ──────────────────────────────────────────────
 
@@ -391,6 +391,12 @@ class MainWindow(QMainWindow):
             geo = self._settings.value("geometry")
             if geo:
                 self.restoreGeometry(geo)
+                # Enforce minimum size after restore
+                if self.width() < PANEL_MIN_W or self.height() < PANEL_MIN_H:
+                    self.resize(
+                        max(self.width(), PANEL_MIN_W),
+                        max(self.height(), PANEL_MIN_H),
+                    )
         except Exception:
             pass
 

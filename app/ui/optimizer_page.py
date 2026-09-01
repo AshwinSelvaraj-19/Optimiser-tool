@@ -1026,53 +1026,61 @@ class OptimizerPage(QWidget):
         layout.addWidget(self.gaming_session_frame)
 
         # Buttons
-        btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(8)
+        btn_grid = QVBoxLayout()
+        btn_grid.setSpacing(4)
+
+        btn_row1 = QHBoxLayout()
+        btn_row1.setSpacing(6)
 
         self.optimize_btn = QPushButton("APPLY")
-        self.optimize_btn.setFixedHeight(34)
+        self.optimize_btn.setFixedHeight(30)
         self.optimize_btn.setCursor(Qt.PointingHandCursor)
         self.optimize_btn.setStyleSheet(button_primary_style())
         self.optimize_btn.clicked.connect(self._start_optimization)
-        btn_layout.addWidget(self.optimize_btn)
+        btn_row1.addWidget(self.optimize_btn)
 
         self.benchmark_btn = QPushButton("BENCHMARK")
-        self.benchmark_btn.setFixedHeight(34)
+        self.benchmark_btn.setFixedHeight(30)
         self.benchmark_btn.setCursor(Qt.PointingHandCursor)
         self.benchmark_btn.setStyleSheet(button_secondary_style())
         self.benchmark_btn.clicked.connect(self._start_benchmark)
-        btn_layout.addWidget(self.benchmark_btn)
+        btn_row1.addWidget(self.benchmark_btn)
 
         self.ab_btn = QPushButton("A/B TEST")
-        self.ab_btn.setFixedHeight(34)
+        self.ab_btn.setFixedHeight(30)
         self.ab_btn.setCursor(Qt.PointingHandCursor)
         self.ab_btn.setStyleSheet(button_secondary_style())
         self.ab_btn.clicked.connect(self._start_ab)
-        btn_layout.addWidget(self.ab_btn)
+        btn_row1.addWidget(self.ab_btn)
+
+        btn_grid.addLayout(btn_row1)
+
+        btn_row2 = QHBoxLayout()
+        btn_row2.setSpacing(6)
 
         self.validate_btn = QPushButton("VALIDATE")
-        self.validate_btn.setFixedHeight(34)
+        self.validate_btn.setFixedHeight(30)
         self.validate_btn.setCursor(Qt.PointingHandCursor)
         self.validate_btn.setStyleSheet(button_secondary_style())
         self.validate_btn.clicked.connect(self._start_validation)
-        btn_layout.addWidget(self.validate_btn)
+        btn_row2.addWidget(self.validate_btn)
 
         self.restore_btn = QPushButton("RESTORE")
-        self.restore_btn.setFixedHeight(34)
+        self.restore_btn.setFixedHeight(30)
         self.restore_btn.setCursor(Qt.PointingHandCursor)
         self.restore_btn.setStyleSheet(button_secondary_style())
         self.restore_btn.clicked.connect(self._restore)
-        btn_layout.addWidget(self.restore_btn)
+        btn_row2.addWidget(self.restore_btn)
 
         self.report_btn = QPushButton("EXPORT REPORT")
-        self.report_btn.setFixedHeight(34)
+        self.report_btn.setFixedHeight(30)
         self.report_btn.setCursor(Qt.PointingHandCursor)
         self.report_btn.setStyleSheet(button_secondary_style())
         self.report_btn.clicked.connect(self._export_report)
-        btn_layout.addWidget(self.report_btn)
+        btn_row2.addWidget(self.report_btn)
 
-        btn_layout.addStretch()
-        layout.addLayout(btn_layout)
+        btn_grid.addLayout(btn_row2)
+        layout.addLayout(btn_grid)
 
         # Session controls
         session_frame = QFrame()
@@ -1870,9 +1878,9 @@ class OptimizerPage(QWidget):
                 self.res_emu_ram_val.setText("N/A")
 
             # Update GPU
-            if gpu_info.get("vram_total_mb", 0) > 0:
-                vram_pct = (gpu_info["vram_used_mb"] / gpu_info["vram_total_mb"]) * 100
-                self.res_gpu_val.setText(f"{gpu_info['utilization']:.0f}%")
+            gpu = result.gpu_info
+            if gpu.get("vram_total_mb", 0) > 0:
+                self.res_gpu_val.setText(f"{gpu['utilization']:.0f}%")
             else:
                 self.res_gpu_val.setText("N/A")
 

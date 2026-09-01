@@ -37,8 +37,8 @@ class TestWindowCreation:
 
     def test_compact_size(self):
         w = _make_window()
-        assert 380 <= w.width() <= 600
-        assert 500 <= w.height() <= 900
+        assert 480 <= w.width() <= 1200
+        assert 500 <= w.height() <= 1000
         w.close()
 
     def test_frameless(self):
