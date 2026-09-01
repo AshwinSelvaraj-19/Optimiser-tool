@@ -40,11 +40,25 @@ evidence_sessions/
 gaming_sessions/
 performance_sessions/
 phoenix_pm_*.csv
+gaming_opt_sessions/
+lifecycle_sessions/
+optimization_runs/
+recommendation_history/
+rollback_data/
+benchmark_results/
+app_settings.json
+optimization_sessions/
+adaptive_sessions/
 
 # Temp files
 *.tmp
 *.temp
 ~$*
+PERFORMANCE_DIAGNOSTIC.md
+AUDIT_REPORT.md
+OPTIMIZATION_AUDIT.md
+PHASE*.md
+_profile_temp.py
 
 # PresentMon / Emulator binaries
 PresentMon*.exe
@@ -70,5 +84,3 @@ Desktop.ini
 # Secrets
 secrets.*
 credentials.*
-adaptive_sessions/
-optimization_sessions/

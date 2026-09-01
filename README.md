@@ -1,128 +1,94 @@
-# Heaven Society
+# Heaven Society — Gaming Optimization Suite
 
-A real-time Windows gaming performance optimizer and emulator telemetry system built for MSI App Player / BlueStacks and Free Fire.
+A comprehensive, evidence-based PC gaming optimization tool built with PySide6.
 
 ## Features
 
-- **Real FPS Telemetry** — PresentMon 2.5.1 integration for accurate frame-timing data
-- **Hardware Detection** — CPU, GPU (NVIDIA via NVML), RAM, display, thermal monitoring
-- **Emulator Detection** — HD-Player.exe / MSI App Player / BlueStacks live process detection
-- **Optimization Engine** — Power Plan, Game Mode, Emulator Priority with snapshot/rollback
-- **A/B Benchmarking** — Repeated before/after measurement with confidence scoring
-- **Frame Pacing Analysis** — Stability scoring, spike detection, coefficient of variation
-- **Memory Analysis** — RAM pressure, emulator memory, safe process recommendations
-- **Background Load Analysis** — Process classification without automatic termination
-- **Disk & Storage Cleanup** — Safe temporary file removal with verification
-- **Startup Analysis** — Read-only Windows startup entry detection
-- **Thermal Monitoring** — GPU/CPU temperature tracking with throttling detection
-- **Gaming Session Mode** — Controlled optimization lifecycle with rollback
-- **Professional Reporting** — JSON export and CLI performance reports
+- **Real-time telemetry** — CPU, GPU, RAM, FPS, frame-time, temperature monitoring
+- **Smart optimization** — Safe, reversible Windows gaming optimizations with rollback
+- **Gaming lifecycle** — Automatic detection → baseline → recommend → apply → monitor → restore
+- **Input diagnostics** — Mouse polling consistency, pointer configuration, input latency analysis
+- **System health** — 6-category scoring: Performance, Thermal, Memory, Storage, Background Load, Gaming Readiness
+- **Cleanup center** — Safe temporary file cleanup with preview and categorization
+- **Benchmark engine** — Before/after comparison with measurable evidence
+- **Floating panel** — Compact, movable, always-on-top gaming companion UI
+
+## Requirements
+
+- Windows 10/11 (64-bit)
+- Python 3.10+
+- PySide6
+- psutil
+- pynvml (NVIDIA GPU monitoring, optional)
 
 ## Installation
 
 ```bash
-python -m pip install -r requirements.txt
+pip install PySide6 psutil pynvml
 ```
-
-### Requirements
-
-- Python 3.10+
-- Windows 10/11
-- NVIDIA GPU (recommended for GPU telemetry)
-- [PresentMon 2.5.1](https://github.com/GameTechDev/PresentMon/releases) for FPS telemetry
 
 ## Usage
 
-### Launch GUI
+### GUI Mode
 
 ```bash
 python main.py
 ```
 
-### Diagnostics
+### CLI Mode
 
 ```bash
-python main.py --check-prerequisites
-python main.py --diagnostic
-```
+# System health check
+python main.py --health-score
 
-### FPS Telemetry
+# Telemetry status
+python main.py --telemetry-status
 
-```bash
-python main.py --presentmon-test
-python main.py --telemetry --duration 30
-python main.py --performance-session --duration 120
-```
+# Storage scan
+python main.py --storage-scan
 
-### Benchmarking
+# Process analysis
+python main.py --process-scan
 
-```bash
-python main.py --benchmark --duration 15
-python main.py --ab-benchmark --profile gaming --duration 15 --runs 3
-```
+# Gaming lifecycle
+python main.py --gaming-lifecycle-start
+python main.py --gaming-lifecycle-stop
 
-### Optimization
+# Optimization preview (read-only)
+python main.py --optimize-preview
 
-```bash
-python main.py --emulator-optimize --profile gaming
-python main.py --windows-optimize --profile gaming
-python main.py --analyze-gaming
-```
+# Rollback check
+python main.py --rollback-check
 
-### System Analysis
-
-```bash
-python main.py --memory-status
-python main.py --memory-analyze
-python main.py --disk-status
-python main.py --disk-scan
-python main.py --startup-status
-python main.py --resource-status
-python main.py --thermal-status
-python main.py --hardware-profile
-```
-
-### Validation
-
-```bash
-python main.py --final-validation --profile gaming --duration 10 --runs 3
-python main.py --report
+# Full diagnostics
+python main.py --gameplay-diagnostics --duration 10
 ```
 
 ## Architecture
 
 ```
-phoenix_optimizer/
-├── main.py                    # CLI entry point + GUI launcher
-├── app/
-│   ├── core/                  # Optimization engine, sessions, rollback
-│   ├── performance/           # PresentMon, benchmarks, A/B testing
-│   ├── system/                # CPU, GPU, RAM, disk, thermal, emulator
-│   ├── cleanup/               # Safe system cleanup engine
-│   ├── emulator/              # Emulator detection
-│   ├── ui/                    # PySide6 compact silver/red UI
-│   └── utils/                 # Logger, admin detection
-├── profiles/                  # JSON optimization profiles
-├── tests/                     # Comprehensive test suite
-└── requirements.txt
+app/
+├── core/           # Optimization engine, rollback, profiles, settings
+├── gaming/         # Gaming lifecycle orchestrator
+├── input/          # Input diagnostics and responsiveness
+├── performance/    # Telemetry, benchmarks, FPS, frame analysis
+├── storage/        # Storage intelligence
+├── system/         # CPU, GPU, RAM, display, process monitoring
+├── ui/             # PySide6 GUI (floating panel)
+├── cleanup/        # Safe cleanup engine
+├── emulator/       # BlueStacks, MSI, LDPlayer detection
+└── utils/          # Logging, admin, registry helpers
 ```
 
-## Important Notes
+## Safety
 
-- **PresentMon** requires elevated privileges (UAC) for ETW-based frame capture
-- **Emulator priority** changes require administrator privileges
-- Some optimizations are **recommendation-only** for safety
-- All metrics are **real measurements** — no fabricated data
-- The application **does not** modify game files, memory, or inject code
-- Cleanup operations are **safe** — personal files are never touched
-- Every optimization has **snapshot/rollback** capability
-
-## Test Suite
-
-```bash
-python -m pytest tests/ -q
-```
+- **No game file modification** — Never touches game binaries or configs
+- **No input injection** — Does not simulate mouse/keyboard input
+- **No anti-cheat bypass** — Respects all game security mechanisms
+- **Reversible changes** — Every optimization can be rolled back
+- **Evidence-based** — Recommendations based on measured data, not guesses
+- **Crash recovery** — Detects incomplete sessions on startup
 
 ## License
 
-Internal project — see repository for details.
+Private — Heaven Society
