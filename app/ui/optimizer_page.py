@@ -1254,15 +1254,17 @@ class OptimizerPage(QWidget):
                     f"Optimizations: {len(status.get('optimizations', []))}"
                 )
 
-            # Hardware recommendation
+            # Hardware recommendation (from worker-collected data, NOT on GUI thread)
             try:
-                from app.core.hardware_profile import analyze_hardware_profile
-                prof = analyze_hardware_profile()
-                rec_name = prof.recommended_profile.value.upper()
-                self.hw_hint.setText(
-                    f"Hardware: {prof.system_tier.value.upper()} \u2022 Recommended: {rec_name}"
-                )
-                self.hw_hint.setVisible(True)
+                prof = result.hw_profile
+                if prof:
+                    rec_name = prof.recommended_profile.value.upper()
+                    self.hw_hint.setText(
+                        f"Hardware: {prof.system_tier.value.upper()} \u2022 Recommended: {rec_name}"
+                    )
+                    self.hw_hint.setVisible(True)
+                else:
+                    self.hw_hint.setVisible(False)
             except Exception:
                 self.hw_hint.setVisible(False)
 
@@ -2248,8 +2250,9 @@ class OptimizerPage(QWidget):
     def _apply_engine_status(self, result: OptimizerWorkerResult):
         """Apply optimization engine status from worker result."""
         try:
-            from app.core.optimization_engine import optimization_engine
-            summary = optimization_engine.get_ui_summary()
+            summary = result.engine_summary
+            if summary is None:
+                return
 
             verdict = summary.get("verdict", "N/A")
             self.engine_verdict_label.setText(verdict)

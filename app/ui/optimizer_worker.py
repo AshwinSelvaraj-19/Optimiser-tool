@@ -67,6 +67,12 @@ class OptimizerWorkerResult:
     # responsiveness
     responsiveness: Optional[Any] = None
 
+    # hardware profile (collected in worker, NOT on GUI thread)
+    hw_profile: Optional[Any] = None
+
+    # optimization engine summary (collected in worker, NOT on GUI thread)
+    engine_summary: Optional[Dict[str, Any]] = None
+
 
 # ── worker QObject (runs in QThread) ──────────────────────────────
 
@@ -134,6 +140,12 @@ class _OptimizerWorker(QObject):
 
         # 13. Responsiveness
         self._collect_responsiveness(r, t_pid, t_name)
+
+        # 14. Hardware profile (slow ~1.5s — MUST be collected in worker)
+        self._collect_hw_profile(r)
+
+        # 15. Optimization engine summary (slow ~1.7s — MUST be collected in worker)
+        self._collect_engine_summary(r)
 
     def _collect_gpu(self, r: OptimizerWorkerResult):
         try:
@@ -364,6 +376,23 @@ class _OptimizerWorker(QObject):
                 target_name=t_name,
                 target_pid=t_pid,
             )
+        except Exception:
+            pass
+
+
+    def _collect_hw_profile(self, r):
+        """Collect hardware profile (slow ~1.5s — safe in worker thread)."""
+        try:
+            from app.core.hardware_profile import analyze_hardware_profile
+            r.hw_profile = analyze_hardware_profile()
+        except Exception:
+            pass
+
+    def _collect_engine_summary(self, r):
+        """Collect optimization engine summary (slow ~1.7s — safe in worker thread)."""
+        try:
+            from app.core.optimization_engine import optimization_engine
+            r.engine_summary = optimization_engine.get_ui_summary()
         except Exception:
             pass
 
