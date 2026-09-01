@@ -4183,6 +4183,101 @@ def main():
         print()
         return 0
 
+    # ── Phase 52: Storage Intelligence ────────────────────────
+    if "--storage-status" in sys.argv:
+        from app.storage.storage_intelligence import storage_analyzer
+        from app.system.disk_analyzer import StoragePressure
+
+        overview = storage_analyzer.quick_scan()
+        if not overview.overview:
+            print("  No storage data available.")
+            return 0
+
+        ov = overview.overview
+        print("=" * 55)
+        print("  HEAVEN SOCIETY — STORAGE STATUS")
+        print("=" * 55)
+        print(f"\n  SYSTEM DRIVE")
+        if ov.system_drive:
+            d = ov.system_drive
+            print(f"    Device:     {d.device}")
+            print(f"    Mount:      {d.mountpoint}")
+            print(f"    Filesystem: {d.filesystem}")
+            print(f"    Total:      {ov.total_display}")
+            print(f"    Used:       {ov.used_display} ({ov.overall_percent_used:.0f}%)")
+            print(f"    Free:       {ov.free_display}")
+            print(f"    Type:       {ov.disk_type}")
+        else:
+            print("    Not detected")
+
+        print(f"\n  STORAGE PRESSURE")
+        print(f"    Level: {ov.system_pressure.value}")
+        print(f"    {ov.pressure_description}")
+
+        print(f"\n  DRIVE HEALTH")
+        print(f"    Status: {ov.disk_health.value}")
+
+        if overview.cleanup_candidates:
+            print(f"\n  RECLAIMABLE STORAGE")
+            for t in overview.cleanup_candidates:
+                print(f"    {t.name:<25} {t.estimated_bytes / (1024**2):>8.1f} MB  [{t.status}]")
+            print(f"\n    Total: {overview.total_reclaimable_bytes / (1024**3):.2f} GB")
+
+        if overview.recommendations:
+            print(f"\n  RECOMMENDATIONS")
+            for r in overview.recommendations:
+                sev = r.get("severity", "INFO")
+                print(f"    [{sev}] {r['title']}")
+                print(f"      {r['explanation']}")
+
+        print("\n" + "=" * 55)
+        return 0
+
+    if "--storage-scan" in sys.argv:
+        from app.storage.storage_intelligence import storage_analyzer
+
+        result = storage_analyzer.deep_scan()
+        print("=" * 55)
+        print("  HEAVEN SOCIETY — DEEP STORAGE SCAN")
+        print("=" * 55)
+
+        if result.overview:
+            ov = result.overview
+            print(f"\n  SCAN: {result.scan_depth.value} ({result.duration_seconds:.1f}s)")
+            print(f"\n  SYSTEM DRIVE")
+            if ov.system_drive:
+                d = ov.system_drive
+                print(f"    {d.mountpoint}  {ov.free_display} free / {ov.total_display} total ({ov.overall_percent_used:.0f}% used)  {ov.disk_type}")
+            print(f"  Pressure: {ov.system_pressure.value}")
+            print(f"  Health:   {ov.disk_health.value}")
+
+        if result.largest_directories:
+            print(f"\n  LARGEST DIRECTORIES")
+            for da in result.largest_directories[:10]:
+                status = "OK" if da.accessible else f"ERR: {da.error[:40]}"
+                print(f"    {da.name:<25} {da.size_display:>10}  {da.file_count:>8,} files  [{status}]")
+
+        if result.cleanup_candidates:
+            print(f"\n  CLEANUP CANDIDATES")
+            for t in result.cleanup_candidates:
+                print(f"    {t.name:<25} {t.estimated_bytes / (1024**2):>8.1f} MB  [{t.status}]")
+            print(f"    Total: {result.total_reclaimable_bytes / (1024**3):.2f} GB")
+
+        if result.recommendations:
+            print(f"\n  RECOMMENDATIONS")
+            for r in result.recommendations:
+                sev = r.get("severity", "INFO")
+                print(f"    [{sev}] {r['title']}")
+                print(f"      {r['explanation']}")
+
+        if result.errors:
+            print(f"\n  ERRORS")
+            for e in result.errors:
+                print(f"    {e}")
+
+        print("\n" + "=" * 55)
+        return 0
+
     if "--final-validation" in sys.argv:
         from app.core.validation_engine import run_final_validation
 

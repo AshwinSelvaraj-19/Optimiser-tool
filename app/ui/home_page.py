@@ -231,6 +231,7 @@ class HomePage(QWidget):
             self._apply_status(result)
             self._apply_gaming_analysis(result)
             self._apply_recommendations(result)
+            self._apply_storage()
         except Exception as e:
             logger.debug(f"HomePage apply: {e}")
         self._worker_thread = None
@@ -458,6 +459,37 @@ class HomePage(QWidget):
         except Exception as e:
             logger.debug(f"Recommendations apply: {e}")
 
+    def _apply_storage(self):
+        """Update the STORAGE section from cached scan data."""
+        try:
+            from app.storage.storage_intelligence import storage_analyzer
+            scan = storage_analyzer.last_scan
+            if scan and scan.overview:
+                ov = scan.overview
+                self.storage_status_label.setText(
+                    f"{ov.overall_percent_used:.0f}% used  {ov.free_display} free"
+                )
+                # Color based on pressure
+                if ov.system_pressure.value == "CRITICAL":
+                    color = STATUS_ERROR
+                elif ov.system_pressure.value in ("HIGH_PRESSURE", "LOW_SPACE"):
+                    color = STATUS_WARN
+                else:
+                    color = TEXT_SECONDARY
+                self.storage_status_label.setStyleSheet(f"""
+                    color: {color};
+                    font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+                    border: none;
+                """)
+                self.storage_free_label.setText(
+                    f"{ov.total_display} total"
+                )
+                self.storage_type_label.setText(ov.disk_type)
+            else:
+                self.storage_status_label.setText("--")
+        except Exception as e:
+            logger.debug(f"Storage apply: {e}")
+
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
@@ -641,6 +673,43 @@ class HomePage(QWidget):
         self.rec_layout.addWidget(self.rec_detail_label)
 
         layout.addWidget(self.rec_frame)
+
+        # ── Section: STORAGE ─────────────────────────────────
+        section_storage = QLabel("STORAGE")
+        section_storage.setStyleSheet(section_header_style())
+        layout.addWidget(section_storage)
+
+        self.storage_frame = QFrame()
+        self.storage_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
+        storage_layout = QHBoxLayout(self.storage_frame)
+        storage_layout.setContentsMargins(14, 8, 14, 8)
+        storage_layout.setSpacing(16)
+
+        self.storage_status_label = QLabel("--")
+        self.storage_status_label.setStyleSheet(f"""
+            color: {TEXT_SECONDARY};
+            font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+            border: none;
+        """)
+        storage_layout.addWidget(self.storage_status_label)
+
+        self.storage_free_label = QLabel("")
+        self.storage_free_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY};
+            font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+            border: none;
+        """)
+        storage_layout.addWidget(self.storage_free_label)
+
+        self.storage_type_label = QLabel("")
+        self.storage_type_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY};
+            font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+            border: none;
+        """)
+        storage_layout.addWidget(self.storage_type_label)
+
+        layout.addWidget(self.storage_frame)
 
         # ── Quick Actions ────────────────────────────────────
         actions_layout = QHBoxLayout()
