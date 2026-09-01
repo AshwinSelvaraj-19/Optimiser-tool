@@ -25,6 +25,7 @@ from app.ui.theme import (
     no_data_style, loading_placeholder_style,
 )
 from app.core.telemetry import telemetry_engine
+from app.performance.telemetry_dashboard import telemetry_dashboard, TimeRange
 from app.utils.logger import get_logger
 from app.ui.monitor_page_worker import MonitorWorkerThread, MonitorWorkerResult
 
@@ -84,6 +85,18 @@ class TelemetryCard(QFrame):
         """)
         layout.addWidget(self.bar)
 
+        # Sparkline label (lightweight history visualization)
+        self.sparkline_label = QLabel("")
+        self.sparkline_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY};
+            font-family: {FONT_MONO};
+            font-size: 9px;
+            border: none;
+            padding: 0;
+        """)
+        self.sparkline_label.setFixedHeight(12)
+        layout.addWidget(self.sparkline_label)
+
     def update_value(self, value: float, color: str = TEXT_PRIMARY):
         # Skip expensive stylesheet rebuild if value unchanged
         rounded = round(value, 1)
@@ -109,6 +122,13 @@ class TelemetryCard(QFrame):
             border: none;
         """)
         self.bar.setValue(0)
+
+    def update_sparkline(self, sparkline: str):
+        """Update the lightweight sparkline display."""
+        if sparkline:
+            self.sparkline_label.setText(sparkline)
+        else:
+            self.sparkline_label.setText("")
 
 
 class MonitorPage(QWidget):
@@ -438,10 +458,16 @@ class MonitorPage(QWidget):
         try:
             frame = telemetry_engine.current
 
+            # Record into dashboard history buffers
+            telemetry_dashboard.record_snapshot(frame)
+
             # CPU
             if frame.cpu_utilization > 0:
                 self._cards["CPU"].update_value(
                     frame.cpu_utilization, metric_color(frame.cpu_utilization)
+                )
+                self._cards["CPU"].update_sparkline(
+                    telemetry_dashboard.get_sparkline("cpu")
                 )
             else:
                 self._cards["CPU"].set_na()
@@ -459,6 +485,9 @@ class MonitorPage(QWidget):
                 self._cards["RAM"].update_value(
                     frame.ram_percent, metric_color(frame.ram_percent)
                 )
+                self._cards["RAM"].update_sparkline(
+                    telemetry_dashboard.get_sparkline("ram")
+                )
             else:
                 self._cards["RAM"].set_na()
 
@@ -466,6 +495,9 @@ class MonitorPage(QWidget):
             if frame.gpu_memory_total_mb > 0:
                 vram_pct = (frame.gpu_memory_used_mb / frame.gpu_memory_total_mb) * 100
                 self._cards["VRAM"].update_value(vram_pct, metric_color(vram_pct))
+                self._cards["VRAM"].update_sparkline(
+                    telemetry_dashboard.get_sparkline("vram")
+                )
             else:
                 self._cards["VRAM"].set_na()
 
@@ -473,6 +505,9 @@ class MonitorPage(QWidget):
             if frame.gpu_temp is not None and frame.gpu_temp > 0:
                 self._cards["GPU TEMP"].update_value(
                     frame.gpu_temp, temp_color(frame.gpu_temp)
+                )
+                self._cards["GPU TEMP"].update_sparkline(
+                    telemetry_dashboard.get_sparkline("gpu_temp")
                 )
             else:
                 self._cards["GPU TEMP"].set_na()
@@ -491,11 +526,25 @@ class MonitorPage(QWidget):
                 pm = PresentMonProvider()
                 metrics = pm.get_metrics()
                 if metrics.available and metrics.sample_count > 10:
+                    # Record FPS into dashboard history
+                    telemetry_dashboard.record_fps(
+                        fps=metrics.avg_fps,
+                        one_low=metrics.one_percent_low,
+                        point_one_low=metrics.point_one_percent_low,
+                        frame_time=metrics.avg_frame_time_ms,
+                        frame_variance=metrics.frame_time_variance,
+                    )
                     self._cards["FPS"].update_value(
                         metrics.avg_fps, metric_color(metrics.avg_fps)
                     )
+                    self._cards["FPS"].update_sparkline(
+                        telemetry_dashboard.get_sparkline("fps")
+                    )
                     self._cards["1% LOW"].update_value(
                         metrics.one_percent_low, metric_color(metrics.one_percent_low)
+                    )
+                    self._cards["1% LOW"].update_sparkline(
+                        telemetry_dashboard.get_sparkline("one_low")
                     )
                     self._cards["0.1% LOW"].update_value(
                         metrics.point_one_percent_low,
@@ -503,6 +552,9 @@ class MonitorPage(QWidget):
                     )
                     self._cards["FRAME TIME"].update_value(
                         metrics.avg_frame_time_ms, TEXT_PRIMARY
+                    )
+                    self._cards["FRAME TIME"].update_sparkline(
+                        telemetry_dashboard.get_sparkline("frame_time")
                     )
                     self._cards["FRAME VARIANCE"].update_value(
                         metrics.frame_time_variance, TEXT_PRIMARY
