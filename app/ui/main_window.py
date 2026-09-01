@@ -687,25 +687,51 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._save_geometry()
+
+        # Collect all workers and timers for safe shutdown
+        workers = []
+        timers = []
+
         try:
             for page in self._pages.values():
                 for attr in dir(page):
-                    obj = getattr(page, attr, None)
+                    try:
+                        obj = getattr(page, attr, None)
+                    except Exception:
+                        continue
                     try:
                         if isinstance(obj, QTimer) and obj.isActive():
-                            obj.stop()
+                            timers.append(obj)
                     except Exception:
                         pass
                     try:
                         if hasattr(obj, "isRunning") and obj.isRunning():
-                            obj.quit()
-                            obj.wait(1000)
+                            workers.append(obj)
                     except Exception:
                         pass
+        except Exception as e:
+            from app.utils.logger import get_logger
+            get_logger("ui.main_window").debug(f"Worker/timer collection error: {e}")
+
+        # Safe shutdown
+        from app.core.error_boundaries import safe_shutdown_workers, safe_stop_timers
+        safe_stop_timers(timers)
+        safe_shutdown_workers(workers, timeout_per_worker=1.5)
+
+        # Stop telemetry
+        try:
             from app.core.telemetry import telemetry_engine
             telemetry_engine.stop()
+        except Exception as e:
+            from app.utils.logger import get_logger
+            get_logger("ui.main_window").debug(f"Telemetry stop error: {e}")
+
+        # Cleanup GPU
+        try:
             from app.system.gpu import gpu_monitor
             gpu_monitor.cleanup()
-        except Exception:
-            pass
+        except Exception as e:
+            from app.utils.logger import get_logger
+            get_logger("ui.main_window").debug(f"GPU cleanup error: {e}")
+
         event.accept()

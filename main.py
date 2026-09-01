@@ -4742,6 +4742,44 @@ def main():
                 print(f"  {sid}  {target:<20}  {state:<15}  {dur:.0f}s  {changes} changes")
         return 0
 
+    if "--system-health" in sys.argv:
+        from app.core.error_boundaries import (
+            subsystem_registry, check_dependencies, check_permissions,
+            detect_incomplete_sessions, format_incomplete_sessions,
+        )
+        print(subsystem_registry.format_status())
+        print()
+        deps = check_dependencies()
+        print("DEPENDENCIES")
+        print("-" * 55)
+        for name, available in deps.items():
+            icon = "[OK]" if available else "[!!]"
+            print(f"  {icon} {name}")
+        print()
+        perms = check_permissions()
+        print("PERMISSIONS")
+        print("-" * 55)
+        for name, available in perms.items():
+            icon = "[OK]" if available else "[--]"
+            print(f"  {icon} {name}")
+        print()
+        incomplete = detect_incomplete_sessions()
+        if incomplete:
+            print(format_incomplete_sessions(incomplete))
+        else:
+            print("No incomplete sessions.")
+        return 0
+
+    if "--session-recovery" in sys.argv:
+        from app.core.error_boundaries import (
+            detect_incomplete_sessions, format_incomplete_sessions,
+        )
+        incomplete = detect_incomplete_sessions()
+        print(format_incomplete_sessions(incomplete))
+        if incomplete:
+            print("\nTo restore: use --rollback-restore-all")
+        return 0
+
     if "--final-validation" in sys.argv:
         from app.core.validation_engine import run_final_validation
 
