@@ -4691,6 +4691,57 @@ def main():
             print("No active issues.")
         return 0
 
+    if "--gaming-lifecycle-status" in sys.argv:
+        from app.gaming.gaming_lifecycle import gaming_lifecycle
+        print(gaming_lifecycle.format_status())
+        return 0
+
+    if "--gaming-lifecycle-start" in sys.argv:
+        from app.gaming.gaming_lifecycle import gaming_lifecycle
+        profile_id = "gaming"
+        for i, arg in enumerate(sys.argv):
+            if arg == "--profile" and i + 1 < len(sys.argv):
+                profile_id = sys.argv[i + 1]
+        session = gaming_lifecycle.start(profile_id=profile_id)
+        if session:
+            print(f"Lifecycle started: {session.session_id}")
+            print(f"Target: {session.target_name} PID={session.target_pid}")
+            if session.baseline:
+                b = session.baseline
+                print(f"Baseline: CPU={b.cpu_percent}% GPU={b.gpu_percent}% RAM={b.ram_percent}%")
+            if session.recommendations:
+                print(f"Recommendations: {len(session.recommendations)}")
+                for r in session.recommendations:
+                    auto = "[auto]" if r.auto_apply else "[manual]"
+                    print(f"  {auto} {r.title}")
+        else:
+            print("No gaming target detected. Start BlueStacks or a supported game.")
+        return 0
+
+    if "--gaming-lifecycle-stop" in sys.argv:
+        from app.gaming.gaming_lifecycle import gaming_lifecycle
+        report = gaming_lifecycle.stop()
+        if report:
+            print(report.format_cli())
+        else:
+            print("No active lifecycle to stop.")
+        return 0
+
+    if "--gaming-lifecycle-history" in sys.argv:
+        from app.gaming.gaming_lifecycle import gaming_lifecycle
+        history = gaming_lifecycle.load_history()
+        if not history:
+            print("No lifecycle sessions recorded.")
+        else:
+            for h in history[:10]:
+                sid = h.get("session_id", "?")
+                target = h.get("target_name", "?")
+                state = h.get("state", "?")
+                dur = h.get("duration_seconds", 0)
+                changes = len(h.get("changes", []))
+                print(f"  {sid}  {target:<20}  {state:<15}  {dur:.0f}s  {changes} changes")
+        return 0
+
     if "--final-validation" in sys.argv:
         from app.core.validation_engine import run_final_validation
 
