@@ -1,9 +1,9 @@
 """
 Heaven Society — Floating Gaming Panel
 
-Compact 450x650 floating control panel designed to be used
-beside/over a game. Frameless custom-titlebar with sidebar navigation,
-always-on-top toggle, and smooth window dragging.
+Compact floating control panel designed to be used beside/over a game.
+Custom titlebar with sidebar navigation, always-on-top toggle,
+gaming mode compact UI, and smooth window dragging.
 """
 
 import json
@@ -13,8 +13,8 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QPushButton, QStackedWidget, QFrame, QSizePolicy, QScrollArea,
 )
-from PySide6.QtCore import Qt, Signal, QPoint, QSettings
-from PySide6.QtGui import QFont, QIcon, QCursor
+from PySide6.QtCore import Qt, Signal, QPoint, QSettings, QRect, QTimer
+from PySide6.QtGui import QFont, QIcon, QCursor, QGuiApplication
 
 from app.ui.theme import (
     global_stylesheet, BG_PRIMARY, BG_PANEL, BORDER_LIGHT, BORDER_MEDIUM,
@@ -117,13 +117,15 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        # Frameless floating panel
-        self.setWindowFlags(
-            Qt.FramelessWindowHint
-            | Qt.Window
-            | Qt.WindowStaysOnTopHint  # default: gaming mode ON
-        )
-        self.setAttribute(Qt.WA_TranslucentBackground, False)
+        # Persistent settings
+        self._settings = QSettings("HeavenSociety", "Panel")
+
+        # Read persisted preferences
+        self._always_on_top = self._settings.value("always_on_top", False, type=bool)
+        self._gaming_mode = self._settings.value("gaming_mode", False, type=bool)
+
+        # Apply window flags based on persisted always-on-top
+        self._apply_window_flags()
 
         self.setWindowTitle("Heaven Society")
         self.setMinimumSize(PANEL_MIN_W, PANEL_MIN_H)
@@ -134,19 +136,30 @@ class MainWindow(QMainWindow):
         self._pages = {}
         self._page_stack_map = {}
         self._nav_buttons = []
-        self._gaming_mode = True  # always-on-top by default
         self._drag_pos = None
-        self._settings = QSettings("HeavenSociety", "Panel")
 
         self._setup_ui()
         self.setStyleSheet(global_stylesheet())
 
-        # Restore last position
+        # Restore last position (with off-screen recovery)
         self._restore_geometry()
+
+        # Apply initial gaming mode state
+        if self._gaming_mode:
+            self._apply_gaming_mode_ui(True)
 
         # Create home page immediately
         self._ensure_page("home")
         self._navigate_to("home")
+
+    # ── Window flags helper ───────────────────────────────────
+
+    def _apply_window_flags(self):
+        """Apply window flags based on current always-on-top state."""
+        flags = Qt.FramelessWindowHint | Qt.Window
+        if self._always_on_top:
+            flags |= Qt.WindowStaysOnTopHint
+        self.setWindowFlags(flags)
 
     # ── UI Setup ──────────────────────────────────────────────
 
@@ -180,10 +193,19 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addStretch()
 
-        # Gaming mode toggle at bottom of sidebar
-        self._gm_btn = QPushButton("📌")
+        # Always-on-top toggle (pin icon)
+        self._pin_btn = QPushButton("📌")
+        self._pin_btn.setFixedSize(SIDEBAR_W - 8, 32)
+        self._pin_btn.setToolTip("Always on Top: OFF")
+        self._pin_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self._pin_btn.clicked.connect(self._toggle_always_on_top)
+        self._update_pin_button()
+        sidebar_layout.addWidget(self._pin_btn)
+
+        # Gaming mode toggle
+        self._gm_btn = QPushButton("🎮")
         self._gm_btn.setFixedSize(SIDEBAR_W - 8, 32)
-        self._gm_btn.setToolTip("Gaming Mode: Always on Top")
+        self._gm_btn.setToolTip("Gaming Mode: OFF")
         self._gm_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self._gm_btn.clicked.connect(self._toggle_gaming_mode)
         self._update_gm_button()
@@ -209,7 +231,7 @@ class MainWindow(QMainWindow):
         title_bar.mousePressEvent = self._title_mouse_press
         title_bar.mouseMoveEvent = self._title_mouse_move
         title_bar.mouseReleaseEvent = self._title_mouse_release
-        title_bar.mouseDoubleClickEvent = self._title_double_click
+        # No double-click handler — do not maximize on double-click
         title_bar_layout = QHBoxLayout(title_bar)
         title_bar_layout.setContentsMargins(10, 0, 6, 0)
         title_bar_layout.setSpacing(8)
@@ -320,23 +342,74 @@ class MainWindow(QMainWindow):
     def _title_mouse_release(self, event):
         self._drag_pos = None
 
-    def _title_double_click(self, event):
-        self._toggle_maximize()
+    # ── Always-on-top toggle ──────────────────────────────────
 
-    # ── Gaming mode (always-on-top) ───────────────────────────
+    def _toggle_always_on_top(self):
+        """Toggle always-on-top independently of gaming mode."""
+        self._always_on_top = not self._always_on_top
+        self._settings.setValue("always_on_top", self._always_on_top)
+        self._update_pin_button()
+        self._apply_window_flags()
+        self.show()
+
+    def _update_pin_button(self):
+        if self._always_on_top:
+            self._pin_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {ACCENT_PRIMARY};
+                    color: #ffffff;
+                    border: none;
+                    border-radius: {RADIUS_MD};
+                    font-size: 14px;
+                }}
+            """)
+            self._pin_btn.setToolTip("Always on Top: ON")
+        else:
+            self._pin_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: transparent;
+                    color: {TEXT_TERTIARY};
+                    border: none;
+                    border-radius: {RADIUS_MD};
+                    font-size: 14px;
+                }}
+                QPushButton:hover {{
+                    background-color: {ACCENT_SUBTLE};
+                    color: {ACCENT_PRIMARY};
+                }}
+            """)
+            self._pin_btn.setToolTip("Always on Top: OFF")
+
+    # ── Gaming mode (compact UI) ──────────────────────────────
 
     def _toggle_gaming_mode(self):
+        """Toggle gaming mode: compact UI layout, not always-on-top."""
         self._gaming_mode = not self._gaming_mode
+        self._settings.setValue("gaming_mode", self._gaming_mode)
         self._update_gm_button()
-        if self._gaming_mode:
-            self.setWindowFlags(
-                self.windowFlags() | Qt.WindowStaysOnTopHint
-            )
-        else:
-            self.setWindowFlags(
-                self.windowFlags() & ~Qt.WindowStaysOnTopHint
-            )
-        self.show()
+        self._apply_gaming_mode_ui(self._gaming_mode)
+        # Refresh the current page to pick up new layout
+        current_key = None
+        for btn in self._nav_buttons:
+            if btn._active:
+                current_key = btn.page_key
+                break
+        if current_key and current_key in self._pages:
+            page = self._pages[current_key]
+            if hasattr(page, "refresh"):
+                try:
+                    page.refresh()
+                except Exception:
+                    pass
+
+    def _apply_gaming_mode_ui(self, enabled: bool):
+        """Apply or remove compact gaming mode UI changes."""
+        for page in self._pages.values():
+            if hasattr(page, "set_gaming_mode"):
+                try:
+                    page.set_gaming_mode(enabled)
+                except Exception:
+                    pass
 
     def _update_gm_button(self):
         if self._gaming_mode:
@@ -349,7 +422,7 @@ class MainWindow(QMainWindow):
                     font-size: 14px;
                 }}
             """)
-            self._gm_btn.setToolTip("Gaming Mode: ON (Always on Top)")
+            self._gm_btn.setToolTip("Gaming Mode: ON (Compact UI)")
         else:
             self._gm_btn.setStyleSheet(f"""
                 QPushButton {{
@@ -384,21 +457,41 @@ class MainWindow(QMainWindow):
         """)
         self._status_label.setToolTip(text)
 
-    # ── Geometry persistence ──────────────────────────────────
+    # ── Geometry persistence + off-screen recovery ────────────
 
     def _restore_geometry(self):
+        """Restore saved geometry with off-screen recovery."""
         try:
             geo = self._settings.value("geometry")
             if geo:
                 self.restoreGeometry(geo)
-                # Enforce minimum size after restore
+                # Enforce minimum size
                 if self.width() < PANEL_MIN_W or self.height() < PANEL_MIN_H:
                     self.resize(
                         max(self.width(), PANEL_MIN_W),
                         max(self.height(), PANEL_MIN_H),
                     )
+                # Off-screen recovery: ensure at least partially visible
+                self._ensure_visible_on_screen()
         except Exception:
             pass
+
+    def _ensure_visible_on_screen(self):
+        """Reposition the window if it's outside all screens."""
+        frame = self.frameGeometry()
+        screens = QGuiApplication.screens()
+        if not screens:
+            return
+        # Check if any part of the window is visible on any screen
+        for screen in screens:
+            available = screen.availableGeometry()
+            if available.intersects(frame):
+                return  # visible on at least one screen
+        # Not visible on any screen — move to primary screen center
+        primary = screens[0].availableGeometry()
+        x = primary.x() + (primary.width() - frame.width()) // 2
+        y = primary.y() + (primary.height() - frame.height()) // 2
+        self.move(x, y)
 
     def _save_geometry(self):
         try:

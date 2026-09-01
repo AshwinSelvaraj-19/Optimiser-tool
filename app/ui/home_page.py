@@ -207,10 +207,24 @@ class HomePage(QWidget):
         super().__init__(parent)
         self._worker_thread: HomePageWorkerThread | None = None
         self._last_result: HomePageResult | None = None
+        self._gaming_mode = False
+        self._hidden_widgets = []  # widgets hidden in gaming mode
         self._setup_ui()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_timer)
         self._timer.start(2000)  # 2s between refresh requests
+
+    def set_gaming_mode(self, enabled: bool):
+        """Toggle compact gaming mode: hide non-essential labels."""
+        self._gaming_mode = enabled
+        for w in self._hidden_widgets:
+            try:
+                w.setVisible(not enabled)
+            except Exception:
+                pass
+        # Compact the metrics grid in gaming mode
+        if hasattr(self, 'target_panel') and self.target_panel:
+            self.target_panel.setMinimumHeight(50 if enabled else 80)
 
     # ── Background worker refresh ─────────────────────────────
 
@@ -466,6 +480,7 @@ class HomePage(QWidget):
         self.one_low_block = MetricBlock("1% LOW")
         self.frame_time_block = MetricBlock("FRAME TIME")
         self.stability_block = MetricBlock("STABILITY")
+        self._hidden_widgets.append(self.stability_block)
 
         fps_grid.addWidget(self.fps_block)
         fps_grid.addWidget(self.one_low_block)
@@ -569,6 +584,7 @@ class HomePage(QWidget):
             border: none;
         """)
         layout.addWidget(section_ga)
+        self._hidden_widgets.append(section_ga)
 
         self.ga_frame = QFrame()
         self.ga_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
@@ -604,6 +620,7 @@ class HomePage(QWidget):
         ga_layout.addWidget(self.ga_actions)
 
         layout.addWidget(self.ga_frame)
+        self._hidden_widgets.append(self.ga_frame)
 
         # ── Quick Actions ────────────────────────────────────
         actions_layout = QHBoxLayout()
@@ -622,6 +639,7 @@ class HomePage(QWidget):
         self.benchmark_btn.setStyleSheet(button_secondary_style())
         self.benchmark_btn.clicked.connect(lambda: self.navigate_to.emit("tools"))
         actions_layout.addWidget(self.benchmark_btn)
+        self._hidden_widgets.append(self.benchmark_btn)
 
         self.diagnostic_btn = QPushButton("DIAGNOSTIC")
         self.diagnostic_btn.setFixedHeight(36)
@@ -629,6 +647,7 @@ class HomePage(QWidget):
         self.diagnostic_btn.setStyleSheet(button_secondary_style())
         self.diagnostic_btn.clicked.connect(lambda: self.navigate_to.emit("tools"))
         actions_layout.addWidget(self.diagnostic_btn)
+        self._hidden_widgets.append(self.diagnostic_btn)
 
         actions_layout.addStretch()
         layout.addLayout(actions_layout)
