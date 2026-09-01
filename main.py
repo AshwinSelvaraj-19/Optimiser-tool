@@ -4521,6 +4521,95 @@ def main():
                 print(f"  Error: {e}")
         return 0
 
+    # ── Phase 57: Settings ──────────────────────────────────
+    if "--settings-list" in sys.argv:
+        from app.core.settings import settings
+        print(settings.format_all())
+        return 0
+
+    if "--settings-show" in sys.argv:
+        from app.core.settings import settings, SettingCategory
+
+        cat_name = None
+        for i, arg in enumerate(sys.argv):
+            if arg == "--category" and i + 1 < len(sys.argv):
+                cat_name = sys.argv[i + 1].upper()
+
+        if cat_name:
+            try:
+                cat = SettingCategory(cat_name)
+                print(settings.format_category(cat))
+            except ValueError:
+                print(f"Unknown category: {cat_name}")
+                print(f"Available: {', '.join(c.value for c in SettingCategory)}")
+        else:
+            print(settings.format_all())
+        return 0
+
+    if "--settings-set" in sys.argv:
+        from app.core.settings import settings
+
+        key = None
+        value = None
+        for i, arg in enumerate(sys.argv):
+            if arg == "--key" and i + 1 < len(sys.argv):
+                key = sys.argv[i + 1]
+            if arg == "--value" and i + 1 < len(sys.argv):
+                value = sys.argv[i + 1]
+
+        if not key or value is None:
+            print("Usage: --settings-set --key KEY --value VALUE")
+            return 1
+
+        # Auto-convert value
+        if value.lower() in ("true", "on", "yes"):
+            value = True
+        elif value.lower() in ("false", "off", "no"):
+            value = False
+        else:
+            try:
+                value = int(value)
+            except ValueError:
+                try:
+                    value = float(value)
+                except ValueError:
+                    pass  # keep as string
+
+        success, msg = settings.set(key, value)
+        if success:
+            print(f"OK: {key} = {value}")
+        else:
+            print(f"FAILED: {msg}")
+        return 0
+
+    if "--settings-reset" in sys.argv:
+        from app.core.settings import settings, SettingCategory
+
+        key = None
+        cat_name = None
+        for i, arg in enumerate(sys.argv):
+            if arg == "--key" and i + 1 < len(sys.argv):
+                key = sys.argv[i + 1]
+            if arg == "--category" and i + 1 < len(sys.argv):
+                cat_name = sys.argv[i + 1].upper()
+
+        if key:
+            if settings.reset(key):
+                print(f"Reset: {key}")
+            else:
+                print(f"Setting not found: {key}")
+        elif cat_name:
+            try:
+                cat = SettingCategory(cat_name)
+                count = settings.reset_category(cat)
+                print(f"Reset {count} settings in {cat_name}")
+            except ValueError:
+                print(f"Unknown category: {cat_name}")
+        else:
+            settings.reset()
+            print("All settings reset to defaults")
+        return 0
+
     if "--final-validation" in sys.argv:
         from app.core.validation_engine import run_final_validation
 
