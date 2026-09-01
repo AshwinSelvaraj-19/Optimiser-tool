@@ -11,7 +11,7 @@ from typing import Callable, Optional
 from app.system.cpu import cpu_monitor, CPUInfo
 from app.system.gpu import gpu_monitor, GPUInfo
 from app.system.memory import memory_monitor
-from app.system.thermals import thermal_monitor, ThermalSnapshot
+from app.system.thermal_monitor import thermal_diagnostics, ThermalSnapshot
 from app.core.scanner import hardware_scanner
 from app.utils.logger import get_logger
 
@@ -178,7 +178,7 @@ class TelemetryEngine:
 
         # Thermal
         try:
-            snap = thermal_monitor.read_snapshot(
+            snap = thermal_diagnostics.read_snapshot(
                 cpu_temp=frame.cpu_temp,
                 gpu_temp=frame.gpu_temp,
             )

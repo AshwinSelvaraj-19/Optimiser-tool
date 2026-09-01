@@ -28,6 +28,34 @@ from app.utils.logger import get_logger
 logger = get_logger("system.thermal_monitor")
 
 
+# ── Legacy Compatibility ────────────────────────────────────────
+# Replaces the old app.system.thermals module.
+
+TEMP_NORMAL = 70.0
+TEMP_WARM = 80.0
+TEMP_HOT = 90.0
+TEMP_CRITICAL = 95.0
+
+
+@dataclass
+class ThermalSnapshot:
+    """Point-in-time thermal data (legacy compatibility)."""
+    cpu_temp: Optional[float] = None
+    gpu_temp: Optional[float] = None
+    timestamp: float = 0.0
+    cpu_throttling: bool = False
+    gpu_throttling: bool = False
+
+    @property
+    def any_throttling(self) -> bool:
+        return self.cpu_throttling or self.gpu_throttling
+
+    @property
+    def max_temp(self) -> float:
+        temps = [t for t in [self.cpu_temp, self.gpu_temp] if t is not None]
+        return max(temps) if temps else 0.0
+
+
 # ── Thermal States ─────────────────────────────────────────────
 
 class ThermalState(Enum):
@@ -185,6 +213,27 @@ class ThermalMonitor:
         self._clock_history: List[Tuple[float, float]] = []  # (timestamp, clock_mhz)
         self._temp_history: List[Tuple[float, float]] = []   # (timestamp, temp)
         self._frame_time_history: List[Tuple[float, float]] = []  # (timestamp, frame_time_ms)
+        self._snapshot_history: List[ThermalSnapshot] = []
+        self._max_snapshot_history = 60
+
+    # ── Legacy compatibility API (replaces thermals.py) ────────
+
+    def read_snapshot(self, cpu_temp: Optional[float] = None,
+                      gpu_temp: Optional[float] = None) -> ThermalSnapshot:
+        """Read a thermal snapshot (legacy compatibility)."""
+        snapshot = ThermalSnapshot(
+            cpu_temp=cpu_temp,
+            gpu_temp=gpu_temp,
+            timestamp=time.time(),
+        )
+        if cpu_temp is not None:
+            snapshot.cpu_throttling = cpu_temp >= TEMP_HOT
+        if gpu_temp is not None:
+            snapshot.gpu_throttling = gpu_temp >= TEMP_HOT
+        self._snapshot_history.append(snapshot)
+        if len(self._snapshot_history) > self._max_snapshot_history:
+            self._snapshot_history.pop(0)
+        return snapshot
 
     def diagnose(self, force: bool = False) -> ThermalDiagnostics:
         """

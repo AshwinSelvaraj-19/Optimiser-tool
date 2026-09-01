@@ -15,7 +15,7 @@ from app.system.cpu import cpu_monitor, CPUInfo
 from app.system.gpu import gpu_monitor, GPUInfo
 from app.system.memory import memory_monitor, MemoryInfo
 from app.system.display import display_monitor, DisplayInfo
-from app.system.thermals import thermal_monitor, ThermalSnapshot
+from app.system.thermal_monitor import thermal_diagnostics, ThermalSnapshot
 from app.utils.logger import get_logger, LogContext
 
 logger = get_logger("core.scanner")
