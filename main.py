@@ -4661,6 +4661,36 @@ def main():
         print(f"Dismissed {count} notification(s)")
         return 0
 
+    if "--health-score" in sys.argv:
+        from app.core.health_engine import health_engine
+        score = health_engine.calculate()
+        print(health_engine.format_score(score))
+        return 0
+
+    if "--health-detail" in sys.argv:
+        import json as _json
+        from app.core.health_engine import health_engine
+        score = health_engine.calculate()
+        print(_json.dumps(score.to_dict(), indent=2))
+        return 0
+
+    if "--health-report" in sys.argv:
+        from app.core.health_engine import health_engine
+        score = health_engine.calculate()
+        print(health_engine.format_score(score))
+        print()
+        if score.issues:
+            print("ACTIVE ISSUES:")
+            for issue in sorted(score.issues, key=lambda i: -i.deduction):
+                sev = issue.severity.value
+                print(f"  [{sev}] {issue.title}")
+                print(f"    {issue.explanation}")
+                if issue.recommendation:
+                    print(f"    -> {issue.recommendation}")
+        else:
+            print("No active issues.")
+        return 0
+
     if "--final-validation" in sys.argv:
         from app.core.validation_engine import run_final_validation
 
