@@ -12,7 +12,7 @@ import time
 from PySide6.QtCore import Qt, Signal, QThread, QTimer
 
 from app.ui.theme import (
-    BG_PANEL, BORDER_LIGHT, ACCENT_PRIMARY, ACCENT_SUBTLE,
+    BG_PANEL, BORDER_LIGHT, ACCENT_PRIMARY, ACCENT_LIGHT, ACCENT_SUBTLE,
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY, TEXT_INVERSE,
     STATUS_OK, STATUS_WARN, STATUS_ERROR, STATUS_MUTED,
     FONT_FAMILY, FONT_MONO,
@@ -24,6 +24,7 @@ from app.core.profiles import get_all_profiles
 from app.core.optimizer import optimizer
 from app.performance.benchmark_models import BenchmarkResult, BenchmarkComparison
 from app.utils.logger import get_logger
+from app.ui.optimizer_worker import OptimizerWorkerThread, OptimizerWorkerResult
 
 logger = get_logger("ui.optimizer_page")
 
@@ -158,6 +159,11 @@ class OptimizerPage(QWidget):
         super().__init__(parent)
         self._thread = None
         self._opt_rows = {}
+        self._worker_thread: OptimizerWorkerThread | None = None
+        self._last_result: OptimizerWorkerResult | None = None
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.timeout.connect(self._on_refresh_timer)
+        self._refresh_timer.start(3000)  # 3s between refresh requests
         self._setup_ui()
 
     def _setup_ui(self):
@@ -1122,48 +1128,108 @@ class OptimizerPage(QWidget):
 
         layout.addWidget(session_frame)
 
-    def refresh(self):
-        self._load_status()
-        self._load_windows_status()
-        self._load_resource_status()
-        self._load_background_status()
-        self._load_memory_status()
-        self._load_startup_status()
-        self._load_telemetry_status()
-        self._load_recommendations()
-        self._load_adaptive_status()
-        self._load_input_status()
-        self._load_responsiveness_status()
-        self._load_opt_session_status()
-        self._load_gaming_session_status()
+    # ── Background worker refresh ────────────────────────────
 
-    def _load_status(self):
-        """Load current optimization status with live target detection."""
+    def refresh(self):
+        """Non-blocking refresh: dispatches heavy work to a background worker."""
+        # Immediately update the lightweight target+status if possible
+        self._update_target_fast()
+        # Start background worker if not already running
+        self._start_worker()
+
+    def _on_refresh_timer(self):
+        """Periodic refresh while page is visible."""
+        self._start_worker()
+
+    def _start_worker(self):
+        """Start the background worker if not already running."""
+        if self._worker_thread and self._worker_thread.isRunning():
+            return  # skip — previous work still in progress
+        self._worker_thread = OptimizerWorkerThread(self)
+        self._worker_thread.finished.connect(self._on_worker_result)
+        self._worker_thread.error.connect(self._on_worker_error)
+        self._worker_thread.start()
+
+    def _on_worker_result(self, result: OptimizerWorkerResult):
+        """Slot: worker completed — update all labels from cached result."""
+        self._last_result = result
         try:
-            status = optimizer.get_current_status()
+            self._apply_status(result)
+            self._apply_windows(result)
+            self._apply_resource(result)
+            self._apply_background(result)
+            self._apply_memory(result)
+            self._apply_startup(result)
+            self._apply_telemetry(result)
+            self._apply_recommendations(result)
+            self._apply_adaptive(result)
+            self._apply_input(result)
+            self._apply_responsiveness(result)
+            self._apply_opt_session(result)
+            self._apply_gaming_session(result)
+        except Exception as e:
+            logger.debug(f"Apply result: {e}")
+        # Clean up thread reference
+        self._worker_thread = None
+
+    def _on_worker_error(self, msg: str):
+        """Slot: worker failed — log and allow retry."""
+        logger.debug(f"Worker error: {msg}")
+        self._worker_thread = None
+
+    def _update_target_fast(self):
+        """Fast immediate target display from existing cached target."""
+        try:
+            from app.core.emulator_controller import emulator_controller
+            target = emulator_controller.detect_target()
+            if target:
+                self.target_text.setText(
+                    f"{target.name} \u2022 PID {target.pid}\n"
+                    f"Priority: {target.priority_name} \u2022 CPUs: {target.affinity_cpus}/{target.total_cpus}\n"
+                    f"CPU: {target.cpu_percent:.0f}% \u2022 RAM: {target.memory_mb:.0f}MB"
+                )
+                self.target_text.setStyleSheet(f"""
+                    color: {STATUS_OK};
+                    font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+                    border: none;
+                """)
+            else:
+                self.target_text.setText("No emulator detected")
+                self.target_text.setStyleSheet(f"""
+                    color: {TEXT_TERTIARY};
+                    font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+                    border: none;
+                """)
+        except Exception:
+            pass
+
+    def _apply_status(self, result: OptimizerWorkerResult):
+        """Apply optimization status from worker result."""
+        try:
+            status = result.opt_status
+            if status is None:
+                return
             admin = status.get("admin", False)
             target_name = status.get("target_name", "")
             target_pid = status.get("target_pid", 0)
 
-            # Update target display
-            if target_name and target_pid:
-                # Get detailed emulator info
-                detail = ""
-                try:
-                    from app.core.emulator_controller import emulator_controller
-                    target = emulator_controller.detect_target()
-                    if target:
-                        detail = (
-                            f"{target.name} \u2022 PID {target.pid}\n"
-                            f"Priority: {target.priority_name} \u2022 CPUs: {target.affinity_cpus}/{target.total_cpus}\n"
-                            f"CPU: {target.cpu_percent:.0f}% \u2022 RAM: {target.memory_mb:.0f}MB"
-                        )
-                    else:
-                        detail = f"{target_name} \u2022 PID {target_pid}"
-                except Exception:
-                    detail = f"{target_name} \u2022 PID {target_pid}"
-
+            # Update target display from worker result
+            target = result.target
+            if target:
+                detail = (
+                    f"{target.name} \u2022 PID {target.pid}\n"
+                    f"Priority: {target.priority_name} \u2022 CPUs: {target.affinity_cpus}/{target.total_cpus}\n"
+                    f"CPU: {target.cpu_percent:.0f}% \u2022 RAM: {target.memory_mb:.0f}MB"
+                )
                 self.target_text.setText(detail)
+                self.target_text.setStyleSheet(f"""
+                    color: {STATUS_OK};
+                    font-family: {FONT_MONO};
+                    font-size: {FONT_SIZE_XS};
+                    border: none;
+                """)
+            elif target_name and target_pid:
+                self.target_text.setText(f"{target_name} \u2022 PID {target_pid}")
                 self.target_text.setStyleSheet(f"""
                     color: {STATUS_OK};
                     font-family: {FONT_MONO};
@@ -1232,7 +1298,7 @@ class OptimizerPage(QWidget):
                 self.opt_layout.insertWidget(self.opt_layout.count() - 1, row)
 
         except Exception as e:
-            logger.debug(f"Status load: {e}")
+            logger.debug(f"Status apply: {e}")
 
     def _start_optimization(self):
         profile_id = self.profile_combo.currentData()
@@ -1300,7 +1366,7 @@ class OptimizerPage(QWidget):
             self._log(f"  Review:       {s.review_count}")
 
         # Refresh live state after optimization
-        self._load_status()
+        self._start_worker()
 
     def _start_benchmark(self):
         """Start the before/after optimization benchmark."""
@@ -1556,7 +1622,7 @@ class OptimizerPage(QWidget):
             self._log(f"  Failed: {', '.join(result.failed_entries)}")
         self.restore_btn.setEnabled(True)
         # Refresh live state after restore
-        self._load_status()
+        self._start_worker()
 
     # ── Gaming Session Controls ──────────────────────────────
 
@@ -1703,17 +1769,12 @@ class OptimizerPage(QWidget):
         except Exception as e:
             self._log(f"Export failed: {e}")
 
-    def _load_windows_status(self):
-        """Load Windows gaming diagnostics into the compact section."""
+    def _apply_windows(self, result: OptimizerWorkerResult):
+        """Apply Windows gaming diagnostics from worker result."""
         try:
-            from app.system.windows_gaming import windows_gaming_analyzer
-            from app.core.emulator_controller import emulator_controller
-
-            target = emulator_controller.detect_target()
-            t_name = target.name if target else ""
-            t_pid = target.pid if target else 0
-
-            report = windows_gaming_analyzer.analyze(t_name, t_pid)
+            report = result.win_gaming
+            if report is None:
+                return
 
             # Update status label
             enabled = sum(1 for i in report.items if i.status == "ENABLED")
@@ -1762,42 +1823,14 @@ class OptimizerPage(QWidget):
         self.win_apply_btn.setEnabled(True)
         self._on_complete(report)
         # Refresh Windows diagnostics
-        self._load_windows_status()
+        self._start_worker()
 
-    def _load_resource_status(self):
-        """Load resource analysis into the compact section."""
+    def _apply_resource(self, result: OptimizerWorkerResult):
+        """Apply resource analysis from worker result."""
         try:
-            from app.core.resource_analyzer import resource_analyzer
-            from app.core.emulator_controller import emulator_controller
-            from app.core.telemetry import telemetry_engine
-
-            target = emulator_controller.detect_target()
-            t_pid = target.pid if target else 0
-            t_name = target.name if target else ""
-
-            frame = telemetry_engine.current
-
-            # GPU info
-            gpu_info = {}
-            try:
-                from app.system.gpu import gpu_monitor
-                gpus = gpu_monitor.detect()
-                if gpus and gpus[0].vendor == "NVIDIA":
-                    gpu = gpu_monitor.update_nvidia(gpus[0])
-                    gpu_info = {
-                        "vram_total_mb": gpu.vram_total_mb,
-                        "vram_used_mb": gpu.vram_used_mb,
-                        "utilization": gpu.utilization_gpu,
-                    }
-            except Exception:
-                pass
-
-            status = resource_analyzer.analyze(
-                emulator_pid=t_pid,
-                emulator_name=t_name,
-                telemetry_frame=frame,
-                gpu_info=gpu_info,
-            )
+            status = result.resource
+            if status is None:
+                return
 
             # Update RAM
             if status.ram:
@@ -1858,20 +1891,14 @@ class OptimizerPage(QWidget):
         except Exception as e:
             logger.debug(f"Resource status load: {e}")
 
-    def _load_background_status(self):
-        """Load background load analysis into the compact section."""
+    def _apply_background(self, result: OptimizerWorkerResult):
+        """Apply background load analysis from worker result."""
         try:
-            from app.system.background_analyzer import background_analyzer, CompetitionLevel
-            from app.core.emulator_controller import emulator_controller
-
-            target = emulator_controller.detect_target()
-            t_pid = target.pid if target else 0
-            t_name = target.name if target else ""
-
-            result = background_analyzer.analyze(
-                emulator_pid=t_pid,
-                emulator_name=t_name,
-            )
+            from app.system.background_analyzer import CompetitionLevel
+            result_data = result.background
+            if result_data is None:
+                return
+            r = result_data  # local alias for the background analysis result
 
             # Update overall impact
             impact_colors = {
@@ -1881,16 +1908,16 @@ class OptimizerPage(QWidget):
                 CompetitionLevel.HIGH: STATUS_ERROR,
                 CompetitionLevel.SEVERE: STATUS_ERROR,
             }
-            color = impact_colors.get(result.overall_impact_level, TEXT_TERTIARY)
-            self.bg_impact_label.setText(result.overall_impact_level.value)
+            color = impact_colors.get(r.overall_impact_level, TEXT_TERTIARY)
+            self.bg_impact_label.setText(r.overall_impact_level.value)
             self.bg_impact_label.setStyleSheet(f"""
                 color: {color}; font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS};
                 font-weight: {WEIGHT_BOLD}; border: none;
             """)
 
             # Update CPU competition
-            if result.cpu_competition:
-                c = result.cpu_competition
+            if r.cpu_competition:
+                c = r.cpu_competition
                 c_color = impact_colors.get(c.level, TEXT_TERTIARY)
                 self.bg_cpu_val.setText(f"{c.total_competition_cpu:.1f}%")
                 self.bg_cpu_val.setStyleSheet(f"""
@@ -1901,8 +1928,8 @@ class OptimizerPage(QWidget):
                 self.bg_cpu_val.setText("N/A")
 
             # Update RAM competition
-            if result.ram_competition:
-                c = result.ram_competition
+            if r.ram_competition:
+                c = r.ram_competition
                 c_color = impact_colors.get(c.level, TEXT_TERTIARY)
                 self.bg_ram_val.setText(f"{c.total_competition_ram_mb / 1024:.1f}GB")
                 self.bg_ram_val.setStyleSheet(f"""
@@ -1913,8 +1940,8 @@ class OptimizerPage(QWidget):
                 self.bg_ram_val.setText("N/A")
 
             # Update Disk competition
-            if result.disk_competition:
-                c = result.disk_competition
+            if r.disk_competition:
+                c = r.disk_competition
                 c_color = impact_colors.get(c.level, TEXT_TERTIARY)
                 self.bg_disk_val.setText(f"{c.total_competition_ram_mb:.0f}MB")
                 self.bg_disk_val.setStyleSheet(f"""
@@ -1925,31 +1952,24 @@ class OptimizerPage(QWidget):
                 self.bg_disk_val.setText("N/A")
 
             # Update recommendation
-            if result.safe_candidates:
-                names = [p.name for p in result.safe_candidates[:3]]
+            if r.safe_candidates:
+                names = [p.name for p in r.safe_candidates[:3]]
                 self.bg_rec_label.setText(
-                    f"{len(result.safe_candidates)} process(es) safe to close: {', '.join(names)}"
+                    f"{len(r.safe_candidates)} process(es) safe to close: {', '.join(names)}"
                 )
             else:
-                self.bg_rec_label.setText(result.overall_description)
+                self.bg_rec_label.setText(r.overall_description)
 
         except Exception as e:
-            logger.debug(f"Background status load: {e}")
+            logger.debug(f"Background apply: {e}")
 
-    def _load_memory_status(self):
-        """Load memory optimization analysis into the compact section."""
+    def _apply_memory(self, result: OptimizerWorkerResult):
+        """Apply memory analysis from worker result."""
         try:
-            from app.system.memory_optimizer import memory_optimizer, ProcessCategory
-            from app.core.emulator_controller import emulator_controller
-
-            target = emulator_controller.detect_target()
-            t_pid = target.pid if target else 0
-            t_name = target.name if target else ""
-
-            report = memory_optimizer.analyze(
-                emulator_pid=t_pid,
-                emulator_name=t_name,
-            )
+            from app.system.memory_optimizer import ProcessCategory
+            report = result.memory
+            if report is None:
+                return
 
             # Pressure level
             pressure_colors = {
@@ -1997,7 +2017,7 @@ class OptimizerPage(QWidget):
                 self.mem_emu_val.setText("N/A")
 
             # Top user
-            safe = memory_optimizer.get_safe_closeable_processes(emulator_pid=t_pid)
+            safe = result.safe_closeable
             if safe:
                 self.mem_top_val.setText(f"{safe[0]['name'][:15]} {safe[0]['rss_mb']:.0f}MB")
             else:
@@ -2013,12 +2033,12 @@ class OptimizerPage(QWidget):
         except Exception as e:
             logger.debug(f"Memory status load: {e}")
 
-    def _load_startup_status(self):
-        """Load startup analysis into the compact section."""
+    def _apply_startup(self, result: OptimizerWorkerResult):
+        """Apply startup analysis from worker result."""
         try:
-            from app.system.startup_analyzer import startup_analyzer
-
-            analysis = startup_analyzer.analyze()
+            analysis = result.startup
+            if analysis is None:
+                return
 
             # Total entries
             self.startup_total_val.setText(str(analysis.total_entries))
@@ -2033,7 +2053,7 @@ class OptimizerPage(QWidget):
             """)
 
             # Optional RAM
-            optional_ram = startup_analyzer.get_ram_usage_of_optional()
+            optional_ram = result.startup_optional_ram
             if optional_ram > 100:
                 self.startup_ram_val.setText(f"{optional_ram:.0f}MB")
                 self.startup_ram_val.setStyleSheet(f"""
@@ -2058,11 +2078,10 @@ class OptimizerPage(QWidget):
         except Exception as e:
             logger.debug(f"Startup status load: {e}")
 
-    def _load_telemetry_status(self):
-        """Load telemetry status into the compact section."""
+    def _apply_telemetry(self, result: OptimizerWorkerResult):
+        """Apply telemetry status from worker result."""
         try:
-            from app.core.telemetry import telemetry_engine
-            frame = telemetry_engine.current
+            frame = result.telemetry_frame
 
             if frame is None or frame.timestamp == 0:
                 self.telemetry_status_label.setText("--")
@@ -2108,71 +2127,12 @@ class OptimizerPage(QWidget):
         except Exception as e:
             logger.debug(f"Telemetry status load: {e}")
 
-    def _load_recommendations(self):
-        """Load recommendation status into the compact section."""
+    def _apply_recommendations(self, result: OptimizerWorkerResult):
+        """Apply recommendation status from worker result."""
         try:
-            from app.core.recommendation_engine import recommendation_engine
-            from app.core.optimizer import optimizer
-            from app.performance.telemetry_models import BottleneckType
-
-            # Get current optimization states
-            opt_status = optimizer.get_current_status()
-            states = {}
-            for opt in opt_status.get("optimizations", []):
-                states[opt["id"]] = opt.get("status", "UNKNOWN")
-
-            # Get target info
-            target_name = opt_status.get("target_name", "")
-            target_pid = opt_status.get("target_pid", 0)
-
-            # Try quick telemetry from the existing collector
-            from app.core.telemetry import telemetry_engine
-            frame = telemetry_engine.current
-
-            # Build minimal samples for recommendation engine
-            samples = []
-            if frame and frame.timestamp > 0:
-                from app.performance.telemetry_models import TelemetrySample
-                sample = TelemetrySample(
-                    timestamp=frame.timestamp,
-                    emulator_pid=target_pid,
-                    emulator_name=target_name,
-                    cpu_total_percent=frame.cpu_utilization,
-                    gpu_utilization_percent=frame.gpu_utilization,
-                    system_ram_used_mb=frame.ram_used_mb,
-                    system_ram_total_mb=frame.ram_total_mb,
-                    system_ram_available_mb=frame.ram_total_mb - frame.ram_used_mb if frame.ram_total_mb else None,
-                )
-                samples.append(sample)
-
-            # Determine bottleneck from thermal status
-            bottleneck = BottleneckType.INSUFFICIENT_DATA
-            bn_confidence = 0
-            if frame:
-                if frame.thermal_status == "THROTTLING":
-                    bottleneck = BottleneckType.THERMAL_LIMITED
-                    bn_confidence = 70
-                elif frame.cpu_utilization > 85:
-                    bottleneck = BottleneckType.CPU_BOUND
-                    bn_confidence = 60
-                elif frame.gpu_utilization > 90:
-                    bottleneck = BottleneckType.GPU_BOUND
-                    bn_confidence = 60
-                elif frame.ram_percent > 85:
-                    bottleneck = BottleneckType.MEMORY_BOUND
-                    bn_confidence = 60
-                else:
-                    bottleneck = BottleneckType.NO_CLEAR_BOTTLENECK
-                    bn_confidence = 40
-
-            session = recommendation_engine.analyze(
-                samples=samples,
-                bottleneck_type=bottleneck,
-                bottleneck_confidence=bn_confidence,
-                optimization_states=states,
-                target_name=target_name,
-                target_pid=target_pid,
-            )
+            session = result.rec_session
+            if session is None:
+                return
 
             # Update labels
             bn_str = session.bottleneck.replace("_", " ").title()
@@ -2196,46 +2156,15 @@ class OptimizerPage(QWidget):
         except Exception as e:
             logger.debug(f"Recommendations load: {e}")
 
-    def _load_adaptive_status(self):
-        """Load adaptive optimization status into the compact section."""
+    def _apply_adaptive(self, result: OptimizerWorkerResult):
+        """Apply adaptive optimization status from worker result."""
         try:
-            from app.core.adaptive_optimizer import adaptive_optimizer
-            from app.core.optimizer import optimizer
-            from app.core.telemetry import telemetry_engine
-            from app.performance.telemetry_models import TelemetrySample, BottleneckType
-
-            # Get optimization states
-            opt_status = optimizer.get_current_status()
-            states = {o["id"]: o.get("status", "UNKNOWN") for o in opt_status.get("optimizations", [])}
-            target_name = opt_status.get("target_name", "")
-            target_pid = opt_status.get("target_pid", 0)
-
-            # Get telemetry samples
-            frame = telemetry_engine.current
-            samples = []
-            if frame and frame.timestamp > 0:
-                sample = TelemetrySample(
-                    timestamp=frame.timestamp,
-                    emulator_pid=target_pid,
-                    emulator_name=target_name,
-                    cpu_total_percent=frame.cpu_utilization,
-                    gpu_utilization_percent=frame.gpu_utilization,
-                    system_ram_used_mb=frame.ram_used_mb,
-                    system_ram_total_mb=frame.ram_total_mb,
-                    system_ram_available_mb=frame.ram_total_mb - frame.ram_used_mb if frame.ram_total_mb else None,
-                )
-                samples.append(sample)
-
-            state, confidence, evidence = adaptive_optimizer.classify_state(samples)
+            state = result.adaptive_state
+            confidence = result.adaptive_confidence
+            plan = result.adaptive_plan
+            if state is None or plan is None:
+                return
             state_str = state.value.replace("_", " ").title()
-
-            self.adaptive_state_label.setText(f"{state_str} ({confidence}%)")
-
-            plan = adaptive_optimizer.generate_plan(
-                samples=samples, state=state, state_confidence=confidence,
-                state_evidence=evidence, optimization_states=states,
-                target_name=target_name, target_pid=target_pid,
-            )
 
             self.adaptive_profile_label.setText(f"Profile: {plan.recommended_profile.upper()}")
 
@@ -2258,42 +2187,13 @@ class OptimizerPage(QWidget):
         except Exception as e:
             logger.debug(f"Adaptive status load: {e}")
 
-    def _load_input_status(self):
-        """Load input & gameplay status into the compact section."""
+    def _apply_input(self, result: OptimizerWorkerResult):
+        """Apply input & gameplay status from worker result."""
         try:
-            from app.input.input_diagnostics import run_input_diagnostics
-            from app.input.gameplay_diagnostics import run_gameplay_diagnostics
-            from app.core.telemetry import telemetry_engine
-            from app.performance.telemetry_models import TelemetrySample
-            from app.core.optimizer import optimizer
-
-            opt_status = optimizer.get_current_status()
-            target_name = opt_status.get("target_name", "")
-            target_pid = opt_status.get("target_pid", 0)
-
-            frame = telemetry_engine.current
-            samples = []
-            if frame and frame.timestamp > 0:
-                sample = TelemetrySample(
-                    timestamp=frame.timestamp,
-                    emulator_pid=target_pid,
-                    emulator_name=target_name,
-                    cpu_total_percent=frame.cpu_utilization,
-                    gpu_utilization_percent=frame.gpu_utilization,
-                    system_ram_used_mb=frame.ram_used_mb,
-                    system_ram_total_mb=frame.ram_total_mb,
-                    system_ram_available_mb=frame.ram_total_mb - frame.ram_used_mb if frame.ram_total_mb else None,
-                )
-                samples.append(sample)
-
-            input_session = run_input_diagnostics(
-                target_name=target_name, target_pid=target_pid,
-            )
-
-            gameplay = run_gameplay_diagnostics(
-                samples=samples, input_session=input_session,
-                target_name=target_name, target_pid=target_pid,
-            )
+            input_session = result.input_session
+            gameplay = result.gameplay
+            if input_session is None or gameplay is None:
+                return
 
             # Update labels
             cond_str = gameplay.condition.value.replace("_", " ").title()
@@ -2323,64 +2223,34 @@ class OptimizerPage(QWidget):
         except Exception as e:
             logger.debug(f"Input status load: {e}")
 
-    def _load_responsiveness_status(self):
-        """Load responsiveness status into the compact section."""
+    def _apply_responsiveness(self, result: OptimizerWorkerResult):
+        """Apply responsiveness status from worker result."""
         try:
-            from app.input.responsiveness_analyzer import analyze_responsiveness
-            from app.input.input_diagnostics import run_input_diagnostics
-            from app.core.telemetry import telemetry_engine
-            from app.performance.telemetry_models import TelemetrySample
-            from app.core.optimizer import optimizer
-
-            opt_status = optimizer.get_current_status()
-            target_name = opt_status.get("target_name", "")
-            target_pid = opt_status.get("target_pid", 0)
-
-            frame = telemetry_engine.current
-            samples = []
-            if frame and frame.timestamp > 0:
-                sample = TelemetrySample(
-                    timestamp=frame.timestamp,
-                    emulator_pid=target_pid,
-                    emulator_name=target_name,
-                    cpu_total_percent=frame.cpu_utilization,
-                    gpu_utilization_percent=frame.gpu_utilization,
-                    system_ram_used_mb=frame.ram_used_mb,
-                    system_ram_total_mb=frame.ram_total_mb,
-                    system_ram_available_mb=frame.ram_total_mb - frame.ram_used_mb if frame.ram_total_mb else None,
-                )
-                samples.append(sample)
-
-            input_session = run_input_diagnostics(
-                target_name=target_name, target_pid=target_pid,
-            )
-
-            result = analyze_responsiveness(
-                samples=samples, input_session=input_session,
-                target_name=target_name, target_pid=target_pid,
-            )
+            resp = result.responsiveness
+            if resp is None:
+                return
 
             # Update labels
-            state_str = result.state.value.replace("_", " ").title()
+            state_str = resp.state.value.replace("_", " ").title()
             self.resp_state_label.setText(f"State: {state_str}")
 
-            sc = result.score
+            sc = resp.score
             if sc.overall > 0:
                 self.resp_score_label.setText(f"{sc.overall}/100 ({sc.level})")
             else:
                 self.resp_score_label.setText("N/A")
 
-            detail = f"Confidence: {result.confidence.value} ({result.confidence_percent}%)"
-            if result.recommendations:
-                top = result.recommendations[0]
+            detail = f"Confidence: {resp.confidence.value} ({resp.confidence_percent}%)"
+            if resp.recommendations:
+                top = resp.recommendations[0]
                 detail += f"  |  {top['category']}: {top['reason'][:80]}"
             self.resp_detail_label.setText(detail)
 
         except Exception as e:
-            logger.debug(f"Responsiveness status load: {e}")
+            logger.debug(f"Responsiveness apply: {e}")
 
-    def _load_gaming_session_status(self):
-        """Load gaming session status for the UI."""
+    def _apply_gaming_session(self, result: OptimizerWorkerResult):
+        """Apply gaming session status from worker result."""
         try:
             from app.performance.gaming_session_analyzer import gaming_session_analyzer
             status = gaming_session_analyzer.get_session_status()
@@ -2398,10 +2268,10 @@ class OptimizerPage(QWidget):
             self.gs_detail_label.setText(detail)
 
         except Exception as e:
-            logger.debug(f"Gaming session status load: {e}")
+            logger.debug(f"Gaming session apply: {e}")
 
-    def _load_opt_session_status(self):
-        """Load optimization session status for the UI."""
+    def _apply_opt_session(self, result: OptimizerWorkerResult):
+        """Apply optimization session status from worker result."""
         try:
             from app.core.optimization_executor import optimization_executor
             status = optimization_executor.get_status()
@@ -2423,7 +2293,7 @@ class OptimizerPage(QWidget):
             self.opt_session_detail_label.setText(detail)
 
         except Exception as e:
-            logger.debug(f"Opt session status load: {e}")
+            logger.debug(f"Opt session apply: {e}")
 
     def _log(self, msg):
         self.log_text.append(msg)
