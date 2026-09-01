@@ -1,9 +1,17 @@
 """
-Heaven Society — Floating Gaming Panel
+Heaven Society — Floating Gaming Panel + Normal Window
 
-Compact floating control panel designed to be used beside/over a game.
-Custom titlebar with sidebar navigation, always-on-top toggle,
-gaming mode compact UI, and smooth window dragging.
+Dual-mode application:
+- Panel Mode: compact frameless floating panel (420–520px)
+- Normal Mode: conventional desktop window (900×650)
+
+Features:
+- Always-on-top toggle (persisted)
+- Mode persistence via QSettings
+- Off-screen geometry recovery
+- Compact tab navigation in panel mode
+- Sidebar navigation in normal mode
+- Draggable custom title bar in panel mode
 """
 
 import json
@@ -12,6 +20,7 @@ import os
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QPushButton, QStackedWidget, QFrame, QSizePolicy, QScrollArea,
+    QTabBar, QSpacerItem,
 )
 from PySide6.QtCore import Qt, Signal, QPoint, QSettings, QRect, QTimer
 from PySide6.QtGui import QFont, QIcon, QCursor, QGuiApplication
@@ -29,17 +38,29 @@ from app.utils.logger import get_logger
 
 logger = get_logger("ui.main_window")
 
-# ── Sizing constants ──────────────────────────────────────────────
+# ── Panel mode constants ──────────────────────────────────────────
 
-PANEL_WIDTH = 900
-PANEL_HEIGHT = 650
-PANEL_MIN_W = 480
+PANEL_W = 480
+PANEL_H = 700
+PANEL_MIN_W = 400
 PANEL_MIN_H = 500
-PANEL_MAX_W = 1200
-PANEL_MAX_H = 1000
+PANEL_MAX_W = 520
+PANEL_MAX_H = 850
 
-HEADER_H = 38
+# ── Normal mode constants ─────────────────────────────────────────
+
+NORMAL_W = 900
+NORMAL_H = 650
+NORMAL_MIN_W = 700
+NORMAL_MIN_H = 500
+NORMAL_MAX_W = 1920
+NORMAL_MAX_H = 1080
+
+# ── Common constants ──────────────────────────────────────────────
+
+HEADER_H = 36
 SIDEBAR_W = 50
+TAB_BAR_H = 36
 
 # ── Navigation items ──────────────────────────────────────────────
 
@@ -53,7 +74,7 @@ NAV_ITEMS = [
 ]
 
 
-# ── Sidebar button ────────────────────────────────────────────────
+# ── Sidebar button (normal mode) ─────────────────────────────────
 
 class SidebarButton(QPushButton):
     """Compact icon+tooltip sidebar button."""
@@ -100,12 +121,59 @@ class SidebarButton(QPushButton):
         self._apply_style()
 
 
+# ── Tab button (panel mode) ──────────────────────────────────────
+
+class TabButton(QPushButton):
+    """Compact tab-style button for panel navigation."""
+
+    def __init__(self, icon: str, key: str, tooltip: str, parent=None):
+        super().__init__(f"{icon}", parent)
+        self.page_key = key
+        self.setCheckable(True)
+        self.setCursor(QCursor(Qt.PointingHandCursor))
+        self.setToolTip(tooltip)
+        self._active = False
+        self._apply_style()
+
+    def _apply_style(self):
+        if self._active:
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {ACCENT_PRIMARY};
+                    color: #ffffff;
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 14px;
+                    font-weight: {WEIGHT_BOLD};
+                    padding: 4px 6px;
+                }}
+            """)
+        else:
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: transparent;
+                    color: {TEXT_TERTIARY};
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 14px;
+                    padding: 4px 6px;
+                }}
+                QPushButton:hover {{
+                    background-color: {ACCENT_SUBTLE};
+                    color: {ACCENT_PRIMARY};
+                }}
+            """)
+
+    def setActive(self, active: bool):
+        self._active = active
+        self._apply_style()
+
+
 # ── Main Window ───────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
-    """Heaven Society — compact floating gaming panel."""
+    """Heaven Society — dual-mode floating gaming panel / normal window."""
 
-    # Lazy page constructors
     _PAGE_FACTORIES = {
         "home":     ("app.ui.home_page",      "HomePage"),
         "optimize": ("app.ui.optimizer_page",  "OptimizerPage"),
@@ -117,49 +185,67 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        # Persistent settings
         self._settings = QSettings("HeavenSociety", "Panel")
 
-        # Read persisted preferences
+        # Persisted preferences
         self._always_on_top = self._settings.value("always_on_top", False, type=bool)
+        self._panel_mode = self._settings.value("panel_mode", True, type=bool)
         self._gaming_mode = self._settings.value("gaming_mode", False, type=bool)
 
-        # Apply window flags based on persisted always-on-top
-        self._apply_window_flags()
-
-        self.setWindowTitle("Heaven Society")
-        self.setMinimumSize(PANEL_MIN_W, PANEL_MIN_H)
-        self.setMaximumSize(PANEL_MAX_W, PANEL_MAX_H)
-        self.resize(PANEL_WIDTH, PANEL_HEIGHT)
-
-        # State
+        # Mutable state
         self._pages = {}
         self._page_stack_map = {}
         self._nav_buttons = []
+        self._tab_buttons = []
         self._drag_pos = None
+        self._current_page_key = "home"
+
+        # UI elements that change between modes
+        self._sidebar_widget = None
+        self._tab_bar_widget = None
+        self._title_bar_widget = None
+        self._page_stack = None
+
+        # Apply window flags first (before setup)
+        self._apply_flags()
+
+        self.setWindowTitle("Heaven Society")
+        self._apply_size_constraints()
 
         self._setup_ui()
         self.setStyleSheet(global_stylesheet())
 
-        # Restore last position (with off-screen recovery)
+        # Restore geometry with off-screen recovery
         self._restore_geometry()
 
-        # Apply initial gaming mode state
-        if self._gaming_mode:
-            self._apply_gaming_mode_ui(True)
-
-        # Create home page immediately
+        # Create home page
         self._ensure_page("home")
         self._navigate_to("home")
 
-    # ── Window flags helper ───────────────────────────────────
+    # ── Window flags ──────────────────────────────────────────
 
-    def _apply_window_flags(self):
-        """Apply window flags based on current always-on-top state."""
-        flags = Qt.FramelessWindowHint | Qt.Window
+    def _apply_flags(self):
+        flags = Qt.Window
+        if self._panel_mode:
+            flags |= Qt.FramelessWindowHint
         if self._always_on_top:
             flags |= Qt.WindowStaysOnTopHint
         self.setWindowFlags(flags)
+
+    def _apply_size_constraints(self):
+        if self._panel_mode:
+            self.setMinimumSize(PANEL_MIN_W, PANEL_MIN_H)
+            self.setMaximumSize(PANEL_MAX_W, PANEL_MAX_H)
+            if self.width() > PANEL_MAX_W or self.height() > PANEL_MAX_H:
+                self.resize(
+                    min(self.width(), PANEL_MAX_W),
+                    min(self.height(), PANEL_MAX_H),
+                )
+            elif self.width() < PANEL_MIN_W:
+                self.resize(PANEL_W, PANEL_H)
+        else:
+            self.setMinimumSize(NORMAL_MIN_W, NORMAL_MIN_H)
+            self.setMaximumSize(NORMAL_MAX_W, NORMAL_MAX_H)
 
     # ── UI Setup ──────────────────────────────────────────────
 
@@ -167,57 +253,32 @@ class MainWindow(QMainWindow):
         central = QWidget()
         central.setObjectName("centralWidget")
         self.setCentralWidget(central)
-        main_layout = QHBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
 
-        # ── Sidebar ───────────────────────────────────────────
-        sidebar = QFrame()
-        sidebar.setFixedWidth(SIDEBAR_W)
-        sidebar.setStyleSheet(f"""
-            QFrame {{
-                background-color: {BG_PANEL};
-                border-right: 1px solid {BORDER_LIGHT};
-            }}
-        """)
-        sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(4, 6, 4, 6)
-        sidebar_layout.setSpacing(2)
+        self._main_layout = QHBoxLayout(central)
+        self._main_layout.setContentsMargins(0, 0, 0, 0)
+        self._main_layout.setSpacing(0)
 
-        # Sidebar nav buttons
-        for icon, key, tooltip in NAV_ITEMS:
-            btn = SidebarButton(icon, key, tooltip)
-            btn.clicked.connect(lambda checked, k=key: self._navigate_to(k))
-            sidebar_layout.addWidget(btn)
-            self._nav_buttons.append(btn)
+        if self._panel_mode:
+            self._setup_panel_ui()
+        else:
+            self._setup_normal_ui()
 
-        sidebar_layout.addStretch()
+    def _setup_panel_ui(self):
+        """Panel mode: title bar + tab bar + page stack (no sidebar)."""
+        # Replace horizontal layout with vertical
+        old_layout = self.centralWidget().layout()
+        if old_layout:
+            while old_layout.count():
+                item = old_layout.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.setParent(None)
+        # Remove old layout
+        QWidget().setLayout(old_layout) if old_layout else None
 
-        # Always-on-top toggle (pin icon)
-        self._pin_btn = QPushButton("📌")
-        self._pin_btn.setFixedSize(SIDEBAR_W - 8, 32)
-        self._pin_btn.setToolTip("Always on Top: OFF")
-        self._pin_btn.setCursor(QCursor(Qt.PointingHandCursor))
-        self._pin_btn.clicked.connect(self._toggle_always_on_top)
-        self._update_pin_button()
-        sidebar_layout.addWidget(self._pin_btn)
-
-        # Gaming mode toggle
-        self._gm_btn = QPushButton("🎮")
-        self._gm_btn.setFixedSize(SIDEBAR_W - 8, 32)
-        self._gm_btn.setToolTip("Gaming Mode: OFF")
-        self._gm_btn.setCursor(QCursor(Qt.PointingHandCursor))
-        self._gm_btn.clicked.connect(self._toggle_gaming_mode)
-        self._update_gm_button()
-        sidebar_layout.addWidget(self._gm_btn)
-
-        main_layout.addWidget(sidebar)
-
-        # ── Content area ──────────────────────────────────────
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(0)
+        v_layout = QVBoxLayout(self.centralWidget())
+        v_layout.setContentsMargins(0, 0, 0, 0)
+        v_layout.setSpacing(0)
 
         # ── Title bar (draggable) ─────────────────────────────
         title_bar = QFrame()
@@ -231,62 +292,113 @@ class MainWindow(QMainWindow):
         title_bar.mousePressEvent = self._title_mouse_press
         title_bar.mouseMoveEvent = self._title_mouse_move
         title_bar.mouseReleaseEvent = self._title_mouse_release
-        # No double-click handler — do not maximize on double-click
-        title_bar_layout = QHBoxLayout(title_bar)
-        title_bar_layout.setContentsMargins(10, 0, 6, 0)
-        title_bar_layout.setSpacing(8)
+        tb_layout = QHBoxLayout(title_bar)
+        tb_layout.setContentsMargins(10, 0, 6, 0)
+        tb_layout.setSpacing(6)
 
-        # Logo
-        logo = QLabel("HEAVEN SOCIETY")
+        logo = QLabel("HS")
         logo.setStyleSheet(f"""
             color: {ACCENT_PRIMARY};
             font-family: {FONT_FAMILY};
-            font-size: 10px;
+            font-size: 12px;
             font-weight: {WEIGHT_BOLD};
-            letter-spacing: 2px;
             border: none;
         """)
-        title_bar_layout.addWidget(logo)
-        title_bar_layout.addStretch()
+        tb_layout.addWidget(logo)
 
-        # Status indicator
+        title = QLabel("HEAVEN SOCIETY")
+        title.setStyleSheet(f"""
+            color: {TEXT_SECONDARY};
+            font-family: {FONT_FAMILY};
+            font-size: 9px;
+            font-weight: {WEIGHT_SEMIBOLD};
+            letter-spacing: 1px;
+            border: none;
+        """)
+        tb_layout.addWidget(title)
+        tb_layout.addStretch()
+
         self._status_label = QLabel("●")
-        self._status_label.setStyleSheet(f"""
-            color: {STATUS_OK};
-            font-size: 8px;
-            border: none;
-        """)
+        self._status_label.setStyleSheet(f"color: {STATUS_OK}; font-size: 8px; border: none;")
         self._status_label.setToolTip("System Ready")
-        title_bar_layout.addWidget(self._status_label)
+        tb_layout.addWidget(self._status_label)
 
-        # Window controls
-        for icon, slot, tip in [
-            ("─", self.showMinimized, "Minimize"),
-            ("□", self._toggle_maximize, "Maximize"),
-            ("✕", self.close, "Close"),
-        ]:
-            btn = QPushButton(icon)
-            btn.setFixedSize(24, 24)
-            btn.setCursor(QCursor(Qt.PointingHandCursor))
-            btn.setToolTip(tip)
-            btn.clicked.connect(slot)
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: transparent;
-                    color: {TEXT_TERTIARY};
-                    border: none;
-                    border-radius: 3px;
-                    font-size: 11px;
-                    font-weight: {WEIGHT_BOLD};
-                }}
-                QPushButton:hover {{
-                    background-color: {ACCENT_SUBTLE};
-                    color: {ACCENT_PRIMARY};
-                }}
-            """)
-            title_bar_layout.addWidget(btn)
+        # Mode switcher
+        mode_btn = QPushButton("⬜")
+        mode_btn.setFixedSize(22, 22)
+        mode_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        mode_btn.setToolTip("Switch to Normal Mode")
+        mode_btn.clicked.connect(self._toggle_mode)
+        mode_btn.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {TEXT_TERTIARY};
+                border: none; border-radius: 3px; font-size: 10px; font-weight: bold; }}
+            QPushButton:hover {{ background: {ACCENT_SUBTLE}; color: {ACCENT_PRIMARY}; }}
+        """)
+        tb_layout.addWidget(mode_btn)
 
-        content_layout.addWidget(title_bar)
+        # Always-on-top pin
+        self._pin_btn = QPushButton("📌")
+        self._pin_btn.setFixedSize(22, 22)
+        self._pin_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self._pin_btn.clicked.connect(self._toggle_always_on_top)
+        self._update_pin_button()
+        tb_layout.addWidget(self._pin_btn)
+
+        # Minimize
+        min_btn = QPushButton("─")
+        min_btn.setFixedSize(22, 22)
+        min_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        min_btn.clicked.connect(self.showMinimized)
+        min_btn.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {TEXT_TERTIARY};
+                border: none; border-radius: 3px; font-size: 10px; font-weight: bold; }}
+            QPushButton:hover {{ background: {ACCENT_SUBTLE}; color: {ACCENT_PRIMARY}; }}
+        """)
+        tb_layout.addWidget(min_btn)
+
+        # Close
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(22, 22)
+        close_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        close_btn.clicked.connect(self.close)
+        close_btn.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {TEXT_TERTIARY};
+                border: none; border-radius: 3px; font-size: 10px; font-weight: bold; }}
+            QPushButton:hover {{ background: #c41e3a; color: #ffffff; }}
+        """)
+        tb_layout.addWidget(close_btn)
+
+        v_layout.addWidget(title_bar)
+        self._title_bar_widget = title_bar
+
+        # ── Tab bar ───────────────────────────────────────────
+        tab_frame = QFrame()
+        tab_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {BG_PANEL};
+                border-bottom: 1px solid {BORDER_LIGHT};
+            }}
+        """)
+        tab_layout = QHBoxLayout(tab_frame)
+        tab_layout.setContentsMargins(6, 4, 6, 4)
+        tab_layout.setSpacing(2)
+
+        for icon, key, tooltip in NAV_ITEMS:
+            btn = TabButton(icon, key, tooltip)
+            btn.clicked.connect(lambda checked, k=key: self._navigate_to(k))
+            tab_layout.addWidget(btn)
+            self._tab_buttons.append(btn)
+
+        tab_layout.addStretch()
+
+        # Settings gear
+        settings_btn = TabButton("⚙", "settings", "Settings")
+        settings_btn.clicked.connect(lambda: self._navigate_to("settings"))
+        tab_layout.addWidget(settings_btn)
+        self._tab_buttons.append(settings_btn)
+
+        v_layout.addWidget(tab_frame)
+        self._tab_bar_widget = tab_frame
 
         # ── Page stack ────────────────────────────────────────
         self._page_stack = QStackedWidget()
@@ -296,9 +408,150 @@ class MainWindow(QMainWindow):
                 border: none;
             }}
         """)
+        v_layout.addWidget(self._page_stack, 1)
+
+    def _setup_normal_ui(self):
+        """Normal mode: sidebar + title bar + page stack."""
+        # Clear existing layout
+        old_layout = self.centralWidget().layout()
+        if old_layout:
+            while old_layout.count():
+                item = old_layout.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.setParent(None)
+
+        layout = QHBoxLayout(self.centralWidget())
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # ── Sidebar ───────────────────────────────────────────
+        sidebar = QFrame()
+        sidebar.setFixedWidth(SIDEBAR_W)
+        sidebar.setStyleSheet(f"""
+            QFrame {{
+                background-color: {BG_PANEL};
+                border-right: 1px solid {BORDER_LIGHT};
+            }}
+        """)
+        sb_layout = QVBoxLayout(sidebar)
+        sb_layout.setContentsMargins(4, 6, 4, 6)
+        sb_layout.setSpacing(2)
+
+        for icon, key, tooltip in NAV_ITEMS:
+            btn = SidebarButton(icon, key, tooltip)
+            btn.clicked.connect(lambda checked, k=key: self._navigate_to(k))
+            sb_layout.addWidget(btn)
+            self._nav_buttons.append(btn)
+
+        sb_layout.addStretch()
+
+        # Always-on-top
+        self._pin_btn = QPushButton("📌")
+        self._pin_btn.setFixedSize(SIDEBAR_W - 8, 32)
+        self._pin_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self._pin_btn.clicked.connect(self._toggle_always_on_top)
+        self._update_pin_button()
+        sb_layout.addWidget(self._pin_btn)
+
+        # Mode switcher (normal → panel)
+        mode_btn = QPushButton("📱")
+        mode_btn.setFixedSize(SIDEBAR_W - 8, 32)
+        mode_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        mode_btn.setToolTip("Switch to Panel Mode")
+        mode_btn.clicked.connect(self._toggle_mode)
+        mode_btn.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {TEXT_TERTIARY};
+                border: none; border-radius: {RADIUS_MD}; font-size: 14px; }}
+            QPushButton:hover {{ background: {ACCENT_SUBTLE}; color: {ACCENT_PRIMARY}; }}
+        """)
+        sb_layout.addWidget(mode_btn)
+
+        layout.addWidget(sidebar)
+        self._sidebar_widget = sidebar
+
+        # ── Content area ──────────────────────────────────────
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+
+        # Title bar (not frameless in normal mode, but keep compact header)
+        title_bar = QFrame()
+        title_bar.setFixedHeight(HEADER_H)
+        title_bar.setStyleSheet(f"""
+            QFrame {{
+                background-color: {BG_PANEL};
+                border-bottom: 1px solid {BORDER_LIGHT};
+            }}
+        """)
+        title_bar.mousePressEvent = self._title_mouse_press
+        title_bar.mouseMoveEvent = self._title_mouse_move
+        title_bar.mouseReleaseEvent = self._title_mouse_release
+        tb_layout = QHBoxLayout(title_bar)
+        tb_layout.setContentsMargins(10, 0, 6, 0)
+        tb_layout.setSpacing(8)
+
+        logo = QLabel("HEAVEN SOCIETY")
+        logo.setStyleSheet(f"""
+            color: {ACCENT_PRIMARY}; font-family: {FONT_FAMILY};
+            font-size: 10px; font-weight: {WEIGHT_BOLD};
+            letter-spacing: 2px; border: none;
+        """)
+        tb_layout.addWidget(logo)
+        tb_layout.addStretch()
+
+        self._status_label = QLabel("●")
+        self._status_label.setStyleSheet(f"color: {STATUS_OK}; font-size: 8px; border: none;")
+        self._status_label.setToolTip("System Ready")
+        tb_layout.addWidget(self._status_label)
+
+        content_layout.addWidget(title_bar)
+
+        self._page_stack = QStackedWidget()
+        self._page_stack.setStyleSheet(f"""
+            QStackedWidget {{ background-color: {BG_PRIMARY}; border: none; }}
+        """)
         content_layout.addWidget(self._page_stack, 1)
 
-        main_layout.addWidget(content, 1)
+        layout.addWidget(content, 1)
+
+        self._title_bar_widget = title_bar
+
+    # ── Mode switching ────────────────────────────────────────
+
+    def _toggle_mode(self):
+        """Switch between panel and normal mode."""
+        self._panel_mode = not self._panel_mode
+        self._settings.setValue("panel_mode", self._panel_mode)
+
+        # Save current page
+        current_page = self._current_page_key
+
+        # Apply flags
+        self._apply_flags()
+
+        # Resize constraints
+        self._apply_size_constraints()
+
+        # Rebuild UI
+        self._nav_buttons = []
+        self._tab_buttons = []
+        self._sidebar_widget = None
+        self._tab_bar_widget = None
+        self._title_bar_widget = None
+
+        self._setup_ui()
+        self.setStyleSheet(global_stylesheet())
+
+        # Restore page
+        self._ensure_page(current_page)
+        self._navigate_to(current_page)
+
+        # Restore geometry for the new mode
+        self._restore_geometry()
+
+        self.show()
 
     # ── Page lazy loading ─────────────────────────────────────
 
@@ -316,8 +569,16 @@ class MainWindow(QMainWindow):
             page.navigate_to.connect(self._navigate_to)
 
     def _navigate_to(self, page_key: str):
+        self._current_page_key = page_key
+
+        # Update panel tab buttons
+        for btn in self._tab_buttons:
+            btn.setActive(btn.page_key == page_key)
+
+        # Update normal sidebar buttons
         for btn in self._nav_buttons:
             btn.setActive(btn.page_key == page_key)
+
         self._ensure_page(page_key)
         self._page_stack.setCurrentWidget(self._pages[page_key])
         page = self._pages[page_key]
@@ -327,10 +588,10 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 logger.error(f"Page refresh error ({page_key}): {e}")
 
-    # ── Window dragging ───────────────────────────────────────
+    # ── Window dragging (panel mode) ──────────────────────────
 
     def _title_mouse_press(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.LeftButton and self._panel_mode:
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
 
@@ -342,152 +603,74 @@ class MainWindow(QMainWindow):
     def _title_mouse_release(self, event):
         self._drag_pos = None
 
-    # ── Always-on-top toggle ──────────────────────────────────
+    # ── Always-on-top ─────────────────────────────────────────
 
     def _toggle_always_on_top(self):
-        """Toggle always-on-top independently of gaming mode."""
         self._always_on_top = not self._always_on_top
         self._settings.setValue("always_on_top", self._always_on_top)
         self._update_pin_button()
-        self._apply_window_flags()
+        self._apply_flags()
         self.show()
 
     def _update_pin_button(self):
         if self._always_on_top:
             self._pin_btn.setStyleSheet(f"""
                 QPushButton {{
-                    background-color: {ACCENT_PRIMARY};
-                    color: #ffffff;
-                    border: none;
-                    border-radius: {RADIUS_MD};
-                    font-size: 14px;
+                    background-color: {ACCENT_PRIMARY}; color: #ffffff;
+                    border: none; border-radius: {RADIUS_MD}; font-size: 14px;
                 }}
             """)
             self._pin_btn.setToolTip("Always on Top: ON")
         else:
             self._pin_btn.setStyleSheet(f"""
                 QPushButton {{
-                    background-color: transparent;
-                    color: {TEXT_TERTIARY};
-                    border: none;
-                    border-radius: {RADIUS_MD};
-                    font-size: 14px;
+                    background-color: transparent; color: {TEXT_TERTIARY};
+                    border: none; border-radius: {RADIUS_MD}; font-size: 14px;
                 }}
                 QPushButton:hover {{
-                    background-color: {ACCENT_SUBTLE};
-                    color: {ACCENT_PRIMARY};
+                    background-color: {ACCENT_SUBTLE}; color: {ACCENT_PRIMARY};
                 }}
             """)
             self._pin_btn.setToolTip("Always on Top: OFF")
 
-    # ── Gaming mode (compact UI) ──────────────────────────────
-
-    def _toggle_gaming_mode(self):
-        """Toggle gaming mode: compact UI layout, not always-on-top."""
-        self._gaming_mode = not self._gaming_mode
-        self._settings.setValue("gaming_mode", self._gaming_mode)
-        self._update_gm_button()
-        self._apply_gaming_mode_ui(self._gaming_mode)
-        # Refresh the current page to pick up new layout
-        current_key = None
-        for btn in self._nav_buttons:
-            if btn._active:
-                current_key = btn.page_key
-                break
-        if current_key and current_key in self._pages:
-            page = self._pages[current_key]
-            if hasattr(page, "refresh"):
-                try:
-                    page.refresh()
-                except Exception:
-                    pass
-
-    def _apply_gaming_mode_ui(self, enabled: bool):
-        """Apply or remove compact gaming mode UI changes."""
-        for page in self._pages.values():
-            if hasattr(page, "set_gaming_mode"):
-                try:
-                    page.set_gaming_mode(enabled)
-                except Exception:
-                    pass
-
-    def _update_gm_button(self):
-        if self._gaming_mode:
-            self._gm_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {ACCENT_PRIMARY};
-                    color: #ffffff;
-                    border: none;
-                    border-radius: {RADIUS_MD};
-                    font-size: 14px;
-                }}
-            """)
-            self._gm_btn.setToolTip("Gaming Mode: ON (Compact UI)")
-        else:
-            self._gm_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: transparent;
-                    color: {TEXT_TERTIARY};
-                    border: none;
-                    border-radius: {RADIUS_MD};
-                    font-size: 14px;
-                }}
-                QPushButton:hover {{
-                    background-color: {ACCENT_SUBTLE};
-                    color: {ACCENT_PRIMARY};
-                }}
-            """)
-            self._gm_btn.setToolTip("Gaming Mode: OFF")
-
-    # ── Maximize/restore ──────────────────────────────────────
-
-    def _toggle_maximize(self):
-        if self.isMaximized():
-            self.showNormal()
-        else:
-            self.showMaximized()
-
     # ── Status ────────────────────────────────────────────────
 
     def set_status(self, text: str, color: str = STATUS_OK):
-        self._status_label.setStyleSheet(f"""
-            color: {color};
-            font-size: 8px;
-            border: none;
-        """)
+        self._status_label.setStyleSheet(f"color: {color}; font-size: 8px; border: none;")
         self._status_label.setToolTip(text)
 
     # ── Geometry persistence + off-screen recovery ────────────
 
     def _restore_geometry(self):
-        """Restore saved geometry with off-screen recovery."""
         try:
-            geo = self._settings.value("geometry")
+            key = "panel_geometry" if self._panel_mode else "normal_geometry"
+            geo = self._settings.value(key)
             if geo:
                 self.restoreGeometry(geo)
-                # Enforce minimum size
-                if self.width() < PANEL_MIN_W or self.height() < PANEL_MIN_H:
-                    self.resize(
-                        max(self.width(), PANEL_MIN_W),
-                        max(self.height(), PANEL_MIN_H),
-                    )
-                # Off-screen recovery: ensure at least partially visible
+                # Enforce min size
+                min_w = PANEL_MIN_W if self._panel_mode else NORMAL_MIN_W
+                min_h = PANEL_MIN_H if self._panel_mode else NORMAL_MIN_H
+                if self.width() < min_w or self.height() < min_h:
+                    self.resize(max(self.width(), min_w), max(self.height(), min_h))
+                # Enforce max size
+                max_w = PANEL_MAX_W if self._panel_mode else NORMAL_MAX_W
+                max_h = PANEL_MAX_H if self._panel_mode else NORMAL_MAX_H
+                if self.width() > max_w or self.height() > max_h:
+                    self.resize(min(self.width(), max_w), min(self.height(), max_h))
                 self._ensure_visible_on_screen()
         except Exception:
             pass
 
     def _ensure_visible_on_screen(self):
-        """Reposition the window if it's outside all screens."""
         frame = self.frameGeometry()
         screens = QGuiApplication.screens()
         if not screens:
             return
-        # Check if any part of the window is visible on any screen
         for screen in screens:
             available = screen.availableGeometry()
             if available.intersects(frame):
-                return  # visible on at least one screen
-        # Not visible on any screen — move to primary screen center
+                return
+        # Reposition to primary screen center
         primary = screens[0].availableGeometry()
         x = primary.x() + (primary.width() - frame.width()) // 2
         y = primary.y() + (primary.height() - frame.height()) // 2
@@ -495,7 +678,8 @@ class MainWindow(QMainWindow):
 
     def _save_geometry(self):
         try:
-            self._settings.setValue("geometry", self.saveGeometry())
+            key = "panel_geometry" if self._panel_mode else "normal_geometry"
+            self._settings.setValue(key, self.saveGeometry())
         except Exception:
             pass
 
@@ -508,7 +692,6 @@ class MainWindow(QMainWindow):
                 for attr in dir(page):
                     obj = getattr(page, attr, None)
                     try:
-                        from PySide6.QtCore import QTimer
                         if isinstance(obj, QTimer) and obj.isActive():
                             obj.stop()
                     except Exception:
