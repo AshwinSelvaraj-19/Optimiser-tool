@@ -4001,6 +4001,82 @@ def main():
         print("=" * 55)
         return 0
 
+    if "--cleanup-center-scan" in sys.argv:
+        from app.cleanup.cleanup_center import cleanup_center
+        items = cleanup_center.scan()
+        print(cleanup_center.format_scan_results())
+        return 0
+
+    if "--cleanup-center-preview" in sys.argv:
+        from app.cleanup.cleanup_center import cleanup_center
+        if not cleanup_center.items:
+            cleanup_center.scan()
+        print(cleanup_center.format_preview())
+        return 0
+
+    if "--cleanup-center-clean" in sys.argv:
+        from app.cleanup.cleanup_center import cleanup_center
+        mode = "safe"
+        for i, arg in enumerate(sys.argv):
+            if arg == "--mode" and i + 1 < len(sys.argv):
+                mode = sys.argv[i + 1]
+
+        if not cleanup_center.items:
+            cleanup_center.scan()
+
+        if mode == "safe":
+            result = cleanup_center.clean_safe()
+        else:
+            print("Use --mode safe for automated safe cleanup.")
+            print("For selective cleanup, use the GUI.")
+            return 0
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — CLEANUP COMPLETE")
+        print("=" * 55)
+        print(f"\n  Freed:     {result.bytes_freed_display}")
+        print(f"  Files:     {result.files_deleted}")
+        print(f"  Success:   {result.successful_items}")
+        print(f"  Failed:    {result.failed_items}")
+        print(f"  Duration:  {result.duration_seconds:.1f}s")
+        print(f"  Message:   {result.message}")
+        print("\n" + "=" * 55)
+        return 0
+
+    if "--cleanup-center-recommend" in sys.argv:
+        from app.cleanup.cleanup_center import cleanup_center
+        if not cleanup_center.items:
+            cleanup_center.scan()
+
+        preview = cleanup_center.get_preview()
+        recs = preview.get("recommendations", [])
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — CLEANUP RECOMMENDATIONS")
+        print("=" * 55)
+        print(f"\n  Disk: {preview['disk_free_gb']:.1f} GB free / {preview['disk_total_gb']:.1f} GB")
+        print(f"  Pressure: {preview['disk_pressure']}")
+        print(f"  Safe to clean: {preview['total_safe_display']}")
+        print(f"  Review needed: {preview['total_review_display']}")
+        blocked_total = sum(b.get('size', 0) for b in preview.get('blocked_items', []))
+        from app.cleanup.cleanup_models import format_bytes
+        print(f"  Do not touch:  {format_bytes(blocked_total)}")
+        print("")
+
+        if recs:
+            print("  RECOMMENDATIONS")
+            print("  " + "-" * 51)
+            for rec in recs:
+                print(f"    [{rec['priority']}] {rec['title']}")
+                print(f"      {rec['description']}")
+                print(f"      Estimated: {rec['estimated_freed_display']}")
+                print("")
+        else:
+            print("  No cleanup recommendations at this time.")
+
+        print("=" * 55)
+        return 0
+
     if "--session-start" in sys.argv:
         from app.performance.gaming_session_analyzer import gaming_session_analyzer
         from app.core.emulator_controller import emulator_controller

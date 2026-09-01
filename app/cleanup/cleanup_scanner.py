@@ -7,6 +7,7 @@ The scanner NEVER deletes files. It only detects and measures.
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -14,6 +15,7 @@ from app.cleanup.cleanup_models import (
     CleanupItem,
     CleanupCategory,
     CleanupStatus,
+    SafetyClassification,
     format_bytes,
 )
 from app.cleanup.cleanup_safety import (
@@ -48,6 +50,10 @@ class CleanupScanner:
         self._scan_shader_cache()
         self._scan_thumbnail_cache()
         self._scan_browser_cache()
+        self._scan_crash_dumps()
+        self._scan_installer_leftovers()
+        self._scan_old_logs()
+        self._scan_recycle_bin()
 
         total_size = sum(i.detected_size for i in self._items)
         total_removable = sum(i.removable_size for i in self._items)
@@ -376,7 +382,6 @@ class CleanupScanner:
     def _scan_browser_cache(self):
         """Scan browser cache directories — RECOMMENDATION ONLY."""
         local_app = os.environ.get("LOCALAPPDATA", "")
-        app_data = os.environ.get("APPDATA", "")
 
         browser_paths = []
 
@@ -406,7 +411,6 @@ class CleanupScanner:
                             file_count += 1
                         except OSError:
                             continue
-                        # Limit scan depth for performance
                         if file_count > 10000:
                             break
                     if file_count > 10000:
@@ -428,10 +432,11 @@ class CleanupScanner:
                 ),
                 path=path,
                 detected_size=size,
-                removable_size=0,  # RECOMMENDATION ONLY
+                removable_size=0,
                 file_count=file_count,
                 removable_file_count=0,
                 risk="LOW",
+                safety=SafetyClassification.REVIEW,
                 available=True,
                 selected=False,
                 can_delete=False,
@@ -440,3 +445,262 @@ class CleanupScanner:
                 status=CleanupStatus.RECOMMENDATION_ONLY,
             )
             self._items.append(item)
+
+    def _scan_crash_dumps(self):
+        """Scan Windows crash dump files — SAFE when old enough."""
+        local_app = os.environ.get("LOCALAPPDATA", "")
+        crash_dirs = []
+
+        # Windows crash dumps
+        crashes = os.path.join(local_app, "CrashDumps")
+        if crashes and os.path.isdir(crashes):
+            crash_dirs.append(("Windows Crash Dumps", crashes))
+
+        # Also check %TEMP% for .dmp files
+        user_temp = tempfile.gettempdir()
+        if user_temp and os.path.isdir(user_temp):
+            crash_dirs.append(("Temp Crash Dumps", user_temp))
+
+        for label, dirpath in crash_dirs:
+            size = 0
+            file_count = 0
+            removable_size = 0
+            removable_count = 0
+            oldest_days = None
+            now = time.time()
+
+            try:
+                for entry in os.scandir(dirpath):
+                    try:
+                        if entry.is_file(follow_symlinks=False):
+                            name_lower = entry.name.lower()
+                            is_dump = name_lower.endswith(('.dmp', '.mdmp', '.hdmp'))
+                            if label == "Temp Crash Dumps" and not is_dump:
+                                continue
+                            if is_dump:
+                                file_count += 1
+                                size += entry.stat().st_size
+                                age_days = int((now - entry.stat().st_mtime) / 86400)
+                                if oldest_days is None or age_days < oldest_days:
+                                    oldest_days = age_days
+                                if can_delete_file(entry.path):
+                                    removable_size += entry.stat().st_size
+                                    removable_count += 1
+                    except (OSError, PermissionError):
+                        continue
+            except (OSError, PermissionError):
+                continue
+
+            if file_count == 0:
+                continue
+
+            # Crash dumps older than 7 days are SAFE; newer are REVIEW
+            safe = oldest_days is not None and oldest_days >= 7
+
+            item = CleanupItem(
+                id=f"crash_{label.lower().replace(' ', '_')}",
+                name=label,
+                category=CleanupCategory.CRASH_DUMPS,
+                description=(f"Crash dump files ({format_bytes(size)}). " +
+                    (f"Safe to remove — oldest is {oldest_days} days old." if safe else
+                     "Recent dumps may be needed for debugging.")),
+                path=dirpath,
+                detected_size=size,
+                removable_size=removable_size if safe else 0,
+                file_count=file_count,
+                removable_file_count=removable_count if safe else 0,
+                risk="LOW" if safe else "MEDIUM",
+                safety=SafetyClassification.SAFE if safe else SafetyClassification.REVIEW,
+                last_access_days=oldest_days,
+                available=removable_count > 0 and safe,
+                selected=safe and removable_count > 0,
+                can_delete=safe and removable_count > 0,
+                reversible=False,
+                reason=(f"{removable_count} dumps, oldest {oldest_days}d" if oldest_days is not None else
+                        f"{file_count} dumps found"),
+                status=CleanupStatus.AVAILABLE if safe and removable_count > 0 else CleanupStatus.RECOMMENDATION_ONLY,
+            )
+            self._items.append(item)
+
+    def _scan_installer_leftovers(self):
+        """Scan for orphaned installer files — SAFE when identifiable."""
+        user_temp = tempfile.gettempdir()
+        if not user_temp or not os.path.isdir(user_temp):
+            return
+
+        size = 0
+        file_count = 0
+        removable_size = 0
+        removable_count = 0
+        now = time.time()
+        oldest_days = None
+
+        installer_extensions = ('.msi', '.exe')
+        # Known safe installer prefixes
+        safe_prefixes = ()
+
+        try:
+            for entry in os.scandir(user_temp):
+                try:
+                    if entry.is_file(follow_symlinks=False):
+                        name_lower = entry.name.lower()
+                        # MSI installers in temp are typically leftovers
+                        if name_lower.endswith('.msi'):
+                            file_count += 1
+                            size += entry.stat().st_size
+                            age_days = int((now - entry.stat().st_mtime) / 86400)
+                            if oldest_days is None or age_days < oldest_days:
+                                oldest_days = age_days
+                            if can_delete_file(entry.path) and age_days >= 3:
+                                removable_size += entry.stat().st_size
+                                removable_count += 1
+                except (OSError, PermissionError):
+                    continue
+        except (OSError, PermissionError):
+            return
+
+        if file_count == 0:
+            return
+
+        safe = oldest_days is not None and oldest_days >= 7
+
+        item = CleanupItem(
+            id="installer_leftovers",
+            name="Installer Leftovers",
+            category=CleanupCategory.INSTALLER_LEFTOVER,
+            description=(f"Orphaned MSI installer files in temp ({format_bytes(size)}). " +
+                (f"Safe — oldest is {oldest_days} days old." if safe else
+                 "May still be needed.")),
+            path=user_temp,
+            detected_size=size,
+            removable_size=removable_size if safe else 0,
+            file_count=file_count,
+            removable_file_count=removable_count if safe else 0,
+            risk="LOW" if safe else "MEDIUM",
+            safety=SafetyClassification.SAFE if safe else SafetyClassification.REVIEW,
+            last_access_days=oldest_days,
+            available=removable_count > 0 and safe,
+            selected=safe and removable_count > 0,
+            can_delete=safe and removable_count > 0,
+            reversible=False,
+            reason=(f"{removable_count} MSI files, oldest {oldest_days}d" if oldest_days is not None else
+                    f"{file_count} MSI files found"),
+            status=CleanupStatus.AVAILABLE if safe and removable_count > 0 else CleanupStatus.RECOMMENDATION_ONLY,
+        )
+        self._items.append(item)
+
+    def _scan_old_logs(self):
+        """Scan for old log files — SAFE when old enough."""
+        log_dirs = []
+
+        # Phoenix optimizer logs
+        project_logs = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "app", "logs"
+        )
+        if os.path.isdir(project_logs):
+            log_dirs.append(("Optimizer Logs", project_logs))
+
+        # Windows event logs are not safe to delete
+        # But we can check for .log files in temp
+        user_temp = tempfile.gettempdir()
+        if user_temp and os.path.isdir(user_temp):
+            log_dirs.append(("Temp Logs", user_temp))
+
+        for label, dirpath in log_dirs:
+            size = 0
+            file_count = 0
+            removable_size = 0
+            removable_count = 0
+            oldest_days = None
+            now = time.time()
+
+            try:
+                for entry in os.scandir(dirpath):
+                    try:
+                        if entry.is_file(follow_symlinks=False):
+                            name_lower = entry.name.lower()
+                            if name_lower.endswith(('.log', '.log.old', '.txt')):
+                                file_count += 1
+                                size += entry.stat().st_size
+                                age_days = int((now - entry.stat().st_mtime) / 86400)
+                                if oldest_days is None or age_days < oldest_days:
+                                    oldest_days = age_days
+                                if can_delete_file(entry.path) and age_days >= 7:
+                                    removable_size += entry.stat().st_size
+                                    removable_count += 1
+                    except (OSError, PermissionError):
+                        continue
+            except (OSError, PermissionError):
+                continue
+
+            if file_count == 0:
+                continue
+
+            safe = oldest_days is not None and oldest_days >= 7
+
+            item = CleanupItem(
+                id=f"logs_{label.lower().replace(' ', '_')}",
+                name=label,
+                category=CleanupCategory.OLD_LOGS,
+                description=(f"Old log files ({format_bytes(size)}). " +
+                    (f"Safe — oldest is {oldest_days} days old." if safe else
+                     "Recent logs may be useful for debugging.")),
+                path=dirpath,
+                detected_size=size,
+                removable_size=removable_size if safe else 0,
+                file_count=file_count,
+                removable_file_count=removable_count if safe else 0,
+                risk="LOW",
+                safety=SafetyClassification.SAFE if safe else SafetyClassification.REVIEW,
+                last_access_days=oldest_days,
+                available=removable_count > 0 and safe,
+                selected=safe and removable_count > 0,
+                can_delete=safe and removable_count > 0,
+                reversible=False,
+                reason=(f"{removable_count} logs, oldest {oldest_days}d" if oldest_days is not None else
+                        f"{file_count} logs found"),
+                status=CleanupStatus.AVAILABLE if safe and removable_count > 0 else CleanupStatus.RECOMMENDATION_ONLY,
+            )
+            self._items.append(item)
+
+    def _scan_recycle_bin(self):
+        """Scan Recycle Bin — RECOMMENDATION ONLY (requires user confirmation)."""
+        try:
+            import subprocess
+            # Use PowerShell to query Recycle Bin size
+            result = subprocess.run(
+                ['powershell', '-Command',
+                 '(New-Object -ComObject Shell.Application).NameSpace(0xA).Items() | '
+                 'Measure-Object -Property Size -Sum | Select-Object -ExpandProperty Sum'],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                size = int(result.stdout.strip())
+                if size > 0:
+                    item = CleanupItem(
+                        id="recycle_bin",
+                        name="Recycle Bin",
+                        category=CleanupCategory.RECYCLE_BIN,
+                        description=(
+                            f"Recycle Bin contains {format_bytes(size)} of deleted files. "
+                            "Emptying permanently removes all items. "
+                            "Cannot be undone."
+                        ),
+                        path="Recycle Bin",
+                        detected_size=size,
+                        removable_size=0,  # RECOMMENDATION ONLY
+                        file_count=0,
+                        removable_file_count=0,
+                        risk="MEDIUM",
+                        safety=SafetyClassification.REVIEW,
+                        available=True,
+                        selected=False,
+                        can_delete=False,
+                        reversible=False,
+                        reason="RECOMMENDATION ONLY — user must confirm",
+                        status=CleanupStatus.RECOMMENDATION_ONLY,
+                    )
+                    self._items.append(item)
+        except Exception as e:
+            logger.debug(f"[CLEANUP] Recycle Bin scan: {e}")

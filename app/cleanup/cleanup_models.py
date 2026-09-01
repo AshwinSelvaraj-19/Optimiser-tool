@@ -30,6 +30,17 @@ class CleanupCategory(Enum):
     RECYCLE_BIN = "Recycle Bin"
     SHADER_CACHE = "Shader Cache"
     APPLICATION_CACHE = "Application Cache"
+    CRASH_DUMPS = "Crash Dumps"
+    INSTALLER_LEFTOVER = "Installer Leftover"
+    OLD_LOGS = "Old Logs"
+    OBSOLETE_TEMP = "Obsolete Temp"
+
+
+class SafetyClassification(Enum):
+    """Safety level for cleanup candidates."""
+    SAFE = "SAFE"           # Safe to auto-clean with user permission
+    REVIEW = "REVIEW"       # Requires user review before deletion
+    DO_NOT_TOUCH = "DO_NOT_TOUCH"  # Never delete automatically
 
 
 @dataclass
@@ -46,10 +57,13 @@ class CleanupItem:
     removable_file_count: int = 0 # Files that can be deleted
     skipped_file_count: int = 0   # Locked/protected files
     risk: str = "LOW"             # LOW, MEDIUM, HIGH
+    safety: SafetyClassification = SafetyClassification.REVIEW
+    last_access_days: Optional[int] = None  # Days since last access
     available: bool = False
     selected: bool = False
     requires_admin: bool = False
     can_delete: bool = False
+    reversible: bool = False  # Whether deletion can be undone
     reason: str = ""
     status: CleanupStatus = CleanupStatus.NOT_AVAILABLE
 
@@ -127,3 +141,42 @@ def format_bytes(size_bytes: int) -> str:
         return f"{size_bytes / (1024 * 1024):.1f} MB"
     else:
         return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
+@dataclass
+class CleanupRecommendation:
+    """A recommendation for cleanup action."""
+    recommendation_id: str = ""
+    title: str = ""
+    description: str = ""
+    category: str = ""
+    priority: str = "LOW"  # HIGH, MEDIUM, LOW
+    estimated_freed_bytes: int = 0
+    item_ids: List[str] = field(default_factory=list)
+    reason: str = ""
+    disk_free_gb: float = 0.0
+    disk_total_gb: float = 0.0
+    pressure_level: str = "NORMAL"  # NORMAL, ELEVATED, HIGH, CRITICAL
+
+    def __post_init__(self):
+        if not self.recommendation_id:
+            self.recommendation_id = f"rec_{uuid.uuid4().hex[:8]}"
+
+    @property
+    def estimated_freed_display(self) -> str:
+        return format_bytes(self.estimated_freed_bytes)
+
+    def to_dict(self) -> dict:
+        return {
+            "recommendation_id": self.recommendation_id,
+            "title": self.title,
+            "description": self.description,
+            "category": self.category,
+            "priority": self.priority,
+            "estimated_freed_bytes": self.estimated_freed_bytes,
+            "estimated_freed_display": self.estimated_freed_display,
+            "item_ids": self.item_ids,
+            "reason": self.reason,
+            "disk_free_gb": self.disk_free_gb,
+            "pressure_level": self.pressure_level,
+        }
