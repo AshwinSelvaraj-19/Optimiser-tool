@@ -23,6 +23,7 @@ from app.ui.theme import (
 )
 from app.core.telemetry import telemetry_engine
 from app.utils.logger import get_logger
+from app.ui.monitor_page_worker import MonitorWorkerThread, MonitorWorkerResult
 
 logger = get_logger("ui.monitor_page")
 
@@ -137,10 +138,17 @@ class MonitorPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._cards = {}
+        self._worker_thread: MonitorWorkerThread | None = None
+        self._worker_count = 0
         self._setup_ui()
+        # Telemetry: 2s for fast cached reads
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_telemetry)
-        self._timer.start(1000)
+        self._timer.start(2000)
+        # Expensive diagnostics: 15s background worker
+        self._diag_timer = QTimer(self)
+        self._diag_timer.timeout.connect(self._start_worker)
+        self._diag_timer.start(15000)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -363,6 +371,107 @@ class MonitorPage(QWidget):
 
     def refresh(self):
         self._update_telemetry()
+        self._start_worker()
+
+    def _start_worker(self):
+        """Start background worker for expensive diagnostics."""
+        if self._worker_thread and self._worker_thread.isRunning():
+            return
+        self._worker_thread = MonitorWorkerThread(self)
+        self._worker_thread.finished.connect(self._on_worker_result)
+        self._worker_thread.error.connect(self._on_worker_error)
+        self._worker_thread.start()
+
+    def _on_worker_result(self, result: MonitorWorkerResult):
+        """Apply background diagnostics results on GUI thread."""
+        try:
+            if result.input_latency_report:
+                self._apply_input_latency(result.input_latency_report)
+            if result.thermal_diag:
+                self._apply_thermal(result.thermal_diag)
+        except Exception as e:
+            logger.debug(f"Monitor worker apply: {e}")
+        self._worker_thread = None
+
+    def _on_worker_error(self, msg: str):
+        logger.debug(f"Monitor worker error: {msg}")
+        self._worker_thread = None
+
+    def _apply_input_latency(self, report):
+        """Apply input latency results (from worker, safe on GUI thread)."""
+        try:
+            from app.performance.input_latency import ResponsivenessLevel
+            score = report.responsiveness_score
+            score_color = STATUS_OK
+            if score < 50:
+                score_color = STATUS_ERROR
+            elif score < 70:
+                score_color = STATUS_WARN
+            self.resp_score_label.setText(f"{score:.0f}/100")
+            self.resp_score_label.setStyleSheet(f"""
+                color: {score_color}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+                font-weight: {WEIGHT_BOLD}; border: none;
+            """)
+            level = report.responsiveness_level
+            level_colors = {
+                ResponsivenessLevel.EXCELLENT: STATUS_OK,
+                ResponsivenessLevel.GOOD: STATUS_OK,
+                ResponsivenessLevel.MODERATE: STATUS_WARN,
+                ResponsivenessLevel.POOR: STATUS_ERROR,
+                ResponsivenessLevel.CRITICAL: STATUS_ERROR,
+                ResponsivenessLevel.INSUFFICIENT_DATA: STATUS_MUTED,
+            }
+            color = level_colors.get(level, TEXT_TERTIARY)
+            self.resp_level_label.setText(level.value)
+            self.resp_level_label.setStyleSheet(f"""
+                color: {color}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM};
+                font-weight: {WEIGHT_BOLD}; border: none;
+            """)
+            bn_type = report.identified_bottleneck.value
+            bn_conf = report.bottleneck_confidence * 100
+            self.resp_bottleneck_label.setText(f"Bottleneck: {bn_type} ({bn_conf:.0f}%)")
+            if report.recommendations:
+                self.resp_rec_label.setText(report.recommendations[0])
+            else:
+                self.resp_rec_label.setText("No configuration changes needed")
+        except Exception as e:
+            logger.debug(f"Input latency apply: {e}")
+
+    def _apply_thermal(self, diag):
+        """Apply thermal diagnostics results (from worker, safe on GUI thread)."""
+        try:
+            from app.system.thermal_monitor import ThermalState, ThrottleIndicator
+            state = diag.thermal_state
+            state_colors = {
+                ThermalState.COOL: STATUS_OK,
+                ThermalState.WARM: STATUS_OK,
+                ThermalState.HOT: STATUS_WARN,
+                ThermalState.THROTTLING: STATUS_ERROR,
+            }
+            color = state_colors.get(state, TEXT_TERTIARY)
+            self.thermal_state_label.setText(state.value)
+            self.thermal_state_label.setStyleSheet(f"""
+                color: {color}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+                font-weight: {WEIGHT_BOLD}; border: none;
+            """)
+            throttle = diag.throttle_indicator
+            throttle_colors = {
+                ThrottleIndicator.NONE: STATUS_OK,
+                ThrottleIndicator.LIGHT: STATUS_WARN,
+                ThrottleIndicator.HEAVY: STATUS_ERROR,
+            }
+            t_color = throttle_colors.get(throttle, TEXT_TERTIARY)
+            self.thermal_throttle_val.setText(throttle.value)
+            self.thermal_throttle_val.setStyleSheet(f"""
+                color: {t_color}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM};
+                font-weight: {WEIGHT_BOLD}; border: none;
+            """)
+            if diag.cpu_temp:
+                self.thermal_cpu_val.setText(f"{diag.cpu_temp:.0f}\u00b0C")
+            if diag.gpu_temp:
+                self.thermal_gpu_val.setText(f"{diag.gpu_temp:.0f}\u00b0C")
+        except Exception as e:
+            logger.debug(f"Thermal apply: {e}")
 
     def _update_telemetry(self):
         try:
@@ -489,11 +598,7 @@ class MonitorPage(QWidget):
                 """)
                 self.bottleneck_detail.setText("System appears balanced")
 
-            # Responsiveness
-            self._update_responsiveness()
-
-            # Thermal
-            self._update_thermal()
+            # Responsiveness and thermal are handled by background worker
 
         except Exception as e:
             logger.debug(f"Monitor update: {e}")
