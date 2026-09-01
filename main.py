@@ -4157,6 +4157,32 @@ def main():
             print("No session to stop.")
         return 0
 
+    # ── Phase 51: Intelligent Recommendations ──────────────────────
+    if "--intelligent-recommendations" in sys.argv:
+        from app.core.intelligent_recommendation import (
+            intelligent_recommendation_engine,
+        )
+        print(intelligent_recommendation_engine.format_status())
+        return 0
+
+    if "--recommendation-history" in sys.argv:
+        from app.core.intelligent_recommendation import (
+            intelligent_recommendation_engine,
+        )
+        history = intelligent_recommendation_engine.history.get_recent(20)
+        history = [e.to_dict() for e in history]
+        print("\n  RECOMMENDATION HISTORY")
+        print("  " + "-" * 40)
+        if history:
+            for h in history:
+                print(f"  [{h.get('severity', '?')}] {h.get('title', '?')}")
+                print(f"    Category: {h.get('category', '?')}")
+                print(f"    Action: {h.get('action_taken', 'none')}")
+        else:
+            print("  No history available.")
+        print()
+        return 0
+
     if "--final-validation" in sys.argv:
         from app.core.validation_engine import run_final_validation
 

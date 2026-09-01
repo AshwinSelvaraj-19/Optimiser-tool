@@ -230,6 +230,7 @@ class HomePage(QWidget):
             self._apply_target(result)
             self._apply_status(result)
             self._apply_gaming_analysis(result)
+            self._apply_recommendations(result)
         except Exception as e:
             logger.debug(f"HomePage apply: {e}")
         self._worker_thread = None
@@ -418,6 +419,45 @@ class HomePage(QWidget):
         except Exception as e:
             logger.debug(f"Gaming analysis apply: {e}")
 
+    def _apply_recommendations(self, result: HomePageResult):
+        """Update the RECOMMENDATIONS section from worker result."""
+        try:
+            from app.core.intelligent_recommendation import (
+                intelligent_recommendation_engine,
+            )
+            summary = intelligent_recommendation_engine.get_ui_summary()
+            health = summary.get("health_text", "UNKNOWN")
+            health_color = summary.get("health_color", TEXT_TERTIARY)
+            recs = summary.get("recommendations", [])
+
+            self.rec_health_label.setText(health)
+            self.rec_health_label.setStyleSheet(f"""
+                color: {health_color};
+                font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_SM};
+                font-weight: {WEIGHT_BOLD}; border: none;
+            """)
+
+            if recs:
+                lines = []
+                for r in recs[:3]:  # top 3
+                    icon = r.get("severity_icon", "•")
+                    title = r.get("title", "")                    lines.append(f"{icon} {title}")
+                self.rec_detail_label.setText("\n".join(lines))
+                self.rec_detail_label.setStyleSheet(f"""
+                    color: {TEXT_SECONDARY};
+                    font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS};
+                    border: none;
+                """)
+            else:
+                self.rec_detail_label.setText("No active recommendations")
+                self.rec_detail_label.setStyleSheet(f"""
+                    color: {TEXT_TERTIARY};
+                    font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS};
+                    border: none;
+                """)
+        except Exception as e:
+            logger.debug(f"Recommendations apply: {e}")
+
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
@@ -571,6 +611,36 @@ class HomePage(QWidget):
 
         layout.addWidget(self.ga_frame)
         self._hidden_widgets.append(self.ga_frame)
+
+        # ── Section: RECOMMENDATIONS ────────────────────────
+        section_rec = QLabel("RECOMMENDATIONS")
+        section_rec.setStyleSheet(section_header_style())
+        layout.addWidget(section_rec)
+
+        self.rec_frame = QFrame()
+        self.rec_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
+        self.rec_layout = QVBoxLayout(self.rec_frame)
+        self.rec_layout.setContentsMargins(14, 10, 14, 10)
+        self.rec_layout.setSpacing(4)
+
+        self.rec_health_label = QLabel("SYSTEM HEALTHY")
+        self.rec_health_label.setStyleSheet(f"""
+            color: {STATUS_OK};
+            font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_SM};
+            font-weight: {WEIGHT_BOLD}; border: none;
+        """)
+        self.rec_layout.addWidget(self.rec_health_label)
+
+        self.rec_detail_label = QLabel("")
+        self.rec_detail_label.setStyleSheet(f"""
+            color: {TEXT_SECONDARY};
+            font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS};
+            border: none;
+        """)
+        self.rec_detail_label.setWordWrap(True)
+        self.rec_layout.addWidget(self.rec_detail_label)
+
+        layout.addWidget(self.rec_frame)
 
         # ── Quick Actions ────────────────────────────────────
         actions_layout = QHBoxLayout()
