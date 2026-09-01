@@ -1268,32 +1268,43 @@ class OptimizerPage(QWidget):
             except Exception:
                 self.hw_hint.setVisible(False)
 
-            # Clear existing rows
-            while self.opt_layout.count() > 1:
-                item = self.opt_layout.takeAt(0)
-                if item.widget():
-                    item.widget().deleteLater()
-            self._opt_rows.clear()
+            # Update optimization rows in-place (avoid delete+recreate every cycle)
+            optimizations = status.get("optimizations", [])
+            current_ids = {opt["id"] for opt in optimizations}
+            status_colors = {
+                "ALREADY OPTIMAL": STATUS_OK,
+                "OPTIMIZABLE": STATUS_WARN,
+                "NOT APPLICABLE": STATUS_MUTED,
+                "REQUIRES ADMIN": STATUS_WARN,
+                "RECOMMENDATION ONLY": STATUS_MUTED,
+            }
 
-            # Add optimization rows
-            for opt in status.get("optimizations", []):
-                row = OptRow(opt["name"], opt.get("current_value", ""))
+            # Remove rows that no longer exist
+            for old_id in list(self._opt_rows.keys()):
+                if old_id not in current_ids:
+                    row = self._opt_rows.pop(old_id)
+                    self.opt_layout.removeWidget(row)
+                    row.deleteLater()
+
+            # Update existing rows, create new ones only when needed
+            insert_pos = self.opt_layout.count() - 1
+            for opt in optimizations:
+                oid = opt["id"]
                 s = opt.get("status", "PENDING")
-                if s == "ALREADY OPTIMAL":
-                    row.set_status("ALREADY OPTIMAL", STATUS_OK)
-                elif s == "OPTIMIZABLE":
-                    row.set_status("OPTIMIZABLE", STATUS_WARN)
-                elif s == "NOT APPLICABLE":
-                    row.set_status("NOT APPLICABLE", STATUS_MUTED)
-                elif s == "REQUIRES ADMIN":
-                    row.set_status("REQUIRES ADMIN", STATUS_WARN)
-                elif s == "RECOMMENDATION ONLY":
-                    row.set_status("RECOMMENDATION", STATUS_MUTED)
-                else:
-                    row.set_status(s, STATUS_MUTED)
+                color = status_colors.get(s, STATUS_MUTED)
+                label = s if s in status_colors else s
 
-                self._opt_rows[opt["id"]] = row
-                self.opt_layout.insertWidget(self.opt_layout.count() - 1, row)
+                if oid in self._opt_rows:
+                    # Update existing row in-place
+                    row = self._opt_rows[oid]
+                    row.set_status(label, color)
+                else:
+                    # Create new row
+                    row = OptRow(opt["name"], opt.get("current_value", ""))
+                    row.set_status(label, color)
+                    self._opt_rows[oid] = row
+                    self.opt_layout.insertWidget(insert_pos, row)
+                    insert_pos += 1
 
         except Exception as e:
             logger.debug(f"Status apply: {e}")
@@ -1781,26 +1792,39 @@ class OptimizerPage(QWidget):
                 f"{enabled} enabled \u2022 {disabled} disabled"
             )
 
-            # Clear existing items
-            while self.win_items_layout.count() > 0:
-                item = self.win_items_layout.takeAt(0)
-                if item.widget():
-                    item.widget().deleteLater()
+            # Update Windows diagnostic rows in-place
+            status_map = {
+                "ENABLED": ("ENABLED ✓", STATUS_OK),
+                "DISABLED": ("DISABLED ✓", STATUS_OK),
+                "AVAILABLE": ("AVAILABLE", STATUS_MUTED),
+                "NOT AVAILABLE": ("NOT AVAILABLE", STATUS_MUTED),
+                "UNKNOWN": ("UNKNOWN", STATUS_MUTED),
+                "REQUIRES ADMIN": ("REQUIRES ADMIN", STATUS_WARN),
+            }
 
-            # Add diagnostic rows
+            # Track existing rows by name
+            if not hasattr(self, '_win_diag_rows'):
+                self._win_diag_rows = {}
+
+            current_names = {d.name for d in report.items}
+
+            # Remove rows no longer present
+            for old_name in list(self._win_diag_rows.keys()):
+                if old_name not in current_names:
+                    row = self._win_diag_rows.pop(old_name)
+                    self.win_items_layout.removeWidget(row)
+                    row.deleteLater()
+
+            # Update or create rows
             for diag_item in report.items:
-                row = OptRow(diag_item.name, diag_item.value)
-                status_map = {
-                    "ENABLED": ("ENABLED ✓", STATUS_OK),
-                    "DISABLED": ("DISABLED ✓", STATUS_OK),
-                    "AVAILABLE": ("AVAILABLE", STATUS_MUTED),
-                    "NOT AVAILABLE": ("NOT AVAILABLE", STATUS_MUTED),
-                    "UNKNOWN": ("UNKNOWN", STATUS_MUTED),
-                    "REQUIRES ADMIN": ("REQUIRES ADMIN", STATUS_WARN),
-                }
                 label, color = status_map.get(diag_item.status, (diag_item.status, STATUS_MUTED))
-                row.set_status(label, color)
-                self.win_items_layout.addWidget(row)
+                if diag_item.name in self._win_diag_rows:
+                    self._win_diag_rows[diag_item.name].set_status(label, color)
+                else:
+                    row = OptRow(diag_item.name, diag_item.value)
+                    row.set_status(label, color)
+                    self._win_diag_rows[diag_item.name] = row
+                    self.win_items_layout.addWidget(row)
 
         except Exception as e:
             logger.debug(f"Windows status load: {e}")
