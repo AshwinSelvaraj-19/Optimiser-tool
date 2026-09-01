@@ -29,6 +29,7 @@ from app.ui.theme import (
     button_secondary_style,
 )
 from app.utils.logger import get_logger
+from app.ui.home_page_worker import HomePageWorkerThread, HomePageResult
 
 logger = get_logger("ui.home_page")
 
@@ -77,6 +78,10 @@ class MetricBlock(QFrame):
             border: none;
         """)
 
+        self._last_value = "--"
+        self._last_color = TEXT_PRIMARY
+        self._last_unit = ""
+
         layout.addWidget(self.title_label)
         h = QHBoxLayout()
         h.setSpacing(3)
@@ -86,6 +91,11 @@ class MetricBlock(QFrame):
         layout.addLayout(h)
 
     def set_value(self, value: str, color: str = TEXT_PRIMARY, unit: str = ""):
+        if value == self._last_value and color == self._last_color and unit == self._last_unit:
+            return  # no change, skip expensive stylesheet rebuild
+        self._last_value = value
+        self._last_color = color
+        self._last_unit = unit
         self.value_label.setText(value)
         self.value_label.setStyleSheet(f"""
             color: {color};
@@ -195,10 +205,226 @@ class HomePage(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._worker_thread: HomePageWorkerThread | None = None
+        self._last_result: HomePageResult | None = None
         self._setup_ui()
         self._timer = QTimer(self)
-        self._timer.timeout.connect(self._update)
-        self._timer.start(1500)
+        self._timer.timeout.connect(self._on_timer)
+        self._timer.start(2000)  # 2s between refresh requests
+
+    # ── Background worker refresh ─────────────────────────────
+
+    def refresh(self):
+        """Non-blocking refresh: dispatch heavy work to background."""
+        self._update_metrics()  # fast — reads cached telemetry
+        self._start_worker()
+
+    def _on_timer(self):
+        """Periodic refresh while page is visible."""
+        self._update_metrics()  # fast
+        self._start_worker()
+
+    def _start_worker(self):
+        if self._worker_thread and self._worker_thread.isRunning():
+            return
+        self._worker_thread = HomePageWorkerThread(self)
+        self._worker_thread.finished.connect(self._on_worker_result)
+        self._worker_thread.error.connect(self._on_worker_error)
+        self._worker_thread.start()
+
+    def _on_worker_result(self, result: HomePageResult):
+        self._last_result = result
+        try:
+            self._apply_target(result)
+            self._apply_status(result)
+            self._apply_gaming_analysis(result)
+        except Exception as e:
+            logger.debug(f"HomePage apply: {e}")
+        self._worker_thread = None
+
+    def _on_worker_error(self, msg: str):
+        logger.debug(f"HomePage worker error: {msg}")
+        self._worker_thread = None
+
+    def _update(self):
+        """Legacy entry point — non-blocking."""
+        self.refresh()
+
+    # ── Fast methods (GUI thread, read cached telemetry) ──────
+
+    def _update_metrics(self):
+        """Update metric blocks from cached telemetry — FAST."""
+        try:
+            from app.core.telemetry import telemetry_engine
+            frame = telemetry_engine.current
+
+            if frame.cpu_utilization > 0:
+                self.cpu_block.set_value(
+                    f"{frame.cpu_utilization:.0f}",
+                    color=metric_color(frame.cpu_utilization),
+                    unit="%"
+                )
+            else:
+                self.cpu_block.set_value("--", color=TEXT_TERTIARY)
+
+            if frame.gpu_utilization > 0:
+                self.gpu_block.set_value(
+                    f"{frame.gpu_utilization:.0f}",
+                    color=metric_color(frame.gpu_utilization),
+                    unit="%"
+                )
+            else:
+                self.gpu_block.set_value("--", color=TEXT_TERTIARY)
+
+            if frame.ram_percent > 0:
+                self.ram_block.set_value(
+                    f"{frame.ram_percent:.0f}",
+                    color=metric_color(frame.ram_percent),
+                    unit="%"
+                )
+            else:
+                self.ram_block.set_value("--", color=TEXT_TERTIARY)
+
+            if frame.gpu_temp is not None and frame.gpu_temp > 0:
+                self.temp_block.set_value(
+                    f"{frame.gpu_temp:.0f}",
+                    color=temp_color(frame.gpu_temp),
+                    unit="\u00b0C"
+                )
+            else:
+                self.temp_block.set_value("N/A", color=TEXT_TERTIARY)
+
+            self._update_fps_from_telemetry()
+        except Exception as e:
+            logger.debug(f"Metrics update: {e}")
+
+    def _update_fps_from_telemetry(self):
+        """Update FPS from cached FPS provider — FAST."""
+        try:
+            from app.performance.fps_provider import fps_registry
+            if fps_registry.active and hasattr(fps_registry.active, 'get_metrics'):
+                metrics = fps_registry.active.get_metrics()
+                if metrics and metrics.available and metrics.sample_count > 0:
+                    fps_val = metrics.median_fps if metrics.median_fps > 0 else metrics.avg_fps
+                    self.fps_block.set_value(f"{fps_val:.0f}", color=STATUS_OK)
+                    if metrics.one_percent_low > 0:
+                        self.one_low_block.set_value(f"{metrics.one_percent_low:.0f}", color=STATUS_WARN)
+                    if metrics.average_frame_time > 0:
+                        self.frame_time_block.set_value(f"{metrics.average_frame_time:.1f}", color=STATUS_OK, unit="ms")
+                    return
+            # No FPS data
+            self.fps_block.set_value("--", color=STATUS_MUTED)
+            self.one_low_block.set_value("--", color=STATUS_MUTED)
+            self.frame_time_block.set_value("--", color=STATUS_MUTED)
+            self.stability_block.set_value("--", color=STATUS_MUTED)
+        except Exception:
+            self.fps_block.set_value("N/A", color=TEXT_TERTIARY)
+            self.one_low_block.set_value("N/A", color=TEXT_TERTIARY)
+            self.frame_time_block.set_value("N/A", color=TEXT_TERTIARY)
+            self.stability_block.set_value("--", color=TEXT_TERTIARY)
+
+    # ── Apply methods (from worker result) ────────────────────
+
+    def _apply_target(self, result: HomePageResult):
+        if result.target_pid:
+            self.target_panel.set_detected(
+                name=result.target_emulator,
+                process=result.target_process,
+                pid=result.target_pid,
+                gpu=result.target_gpu,
+            )
+        else:
+            self.target_panel.set_not_detected()
+
+    def _apply_status(self, result: HomePageResult):
+        try:
+            from app.core.telemetry import telemetry_engine
+            frame = telemetry_engine.current
+
+            if frame.cpu_utilization <= 0 and frame.gpu_utilization <= 0:
+                self.perf_status.setText("IDLE")
+                self.perf_status.setStyleSheet(f"""
+                    color: {STATUS_MUTED}; font-family: {FONT_FAMILY};
+                    font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
+                """)
+            elif frame.gpu_utilization > 90:
+                self.perf_status.setText("GPU LIMITED")
+                self.perf_status.setStyleSheet(f"""
+                    color: {STATUS_ERROR}; font-family: {FONT_FAMILY};
+                    font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
+                """)
+            elif frame.cpu_utilization > 90:
+                self.perf_status.setText("CPU LIMITED")
+                self.perf_status.setStyleSheet(f"""
+                    color: {STATUS_WARN}; font-family: {FONT_FAMILY};
+                    font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
+                """)
+            elif frame.gpu_temp and frame.gpu_temp > 85:
+                self.perf_status.setText("THERMAL WARNING")
+                self.perf_status.setStyleSheet(f"""
+                    color: {STATUS_ERROR}; font-family: {FONT_FAMILY};
+                    font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
+                """)
+            else:
+                self.perf_status.setText("STABLE")
+                self.perf_status.setStyleSheet(f"""
+                    color: {STATUS_OK}; font-family: {FONT_FAMILY};
+                    font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
+                """)
+
+            # PresentMon status
+            if result.pm_available:
+                self.pm_status.setText("PresentMon \u25cf READY")
+                self.pm_status.setStyleSheet(f"""
+                    color: {STATUS_OK}; font-family: {FONT_FAMILY};
+                    font-size: {FONT_SIZE_XS}; border: none;
+                """)
+            else:
+                self.pm_status.setText("PresentMon \u25cf UNAVAILABLE")
+                self.pm_status.setStyleSheet(f"""
+                    color: {STATUS_ERROR}; font-family: {FONT_FAMILY};
+                    font-size: {FONT_SIZE_XS}; border: none;
+                """)
+
+            # Hardware class
+            if result.hw_tier:
+                self.hw_class_label.setText(result.hw_tier)
+            else:
+                self.hw_class_label.setText("")
+
+        except Exception as e:
+            logger.debug(f"Status apply: {e}")
+
+    def _apply_gaming_analysis(self, result: HomePageResult):
+        try:
+            decision = result.decision
+            if decision is None:
+                return
+
+            bn_name = decision.bottleneck.value
+            if bn_name == "UNKNOWN":
+                bn_name = "ANALYZING"
+            self.ga_bottleneck.setText(f"BOTTLENECK: {bn_name}")
+            bn_color = STATUS_MUTED
+            if decision.bottleneck_confidence > 0.7:
+                bn_color = STATUS_ERROR
+            elif decision.bottleneck_confidence > 0.4:
+                bn_color = STATUS_WARN
+            self.ga_bottleneck.setStyleSheet(f"""
+                color: {bn_color};
+                font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+                border: none;
+            """)
+
+            conf_pct = f"{decision.bottleneck_confidence:.0%}"
+            self.ga_confidence.setText(f"CONFIDENCE: {conf_pct}")
+
+            applicable = sum(1 for o in decision.recommended_optimizations if o.status == "APPLICABLE")
+            total = len(decision.recommended_optimizations)
+            self.ga_actions.setText(f"ACTIONS: {applicable}/{total}")
+
+        except Exception as e:
+            logger.debug(f"Gaming analysis apply: {e}")
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -408,237 +634,3 @@ class HomePage(QWidget):
         layout.addLayout(actions_layout)
 
         layout.addStretch()
-
-    def refresh(self):
-        self._update()
-
-    def _update(self):
-        self._update_target()
-        self._update_metrics()
-        self._update_status()
-        self._update_gaming_analysis()
-
-    def _update_target(self):
-        """Detect emulator and update target panel."""
-        try:
-            from app.performance.target_process import target_process_detector
-            candidates = target_process_detector.get_candidates()
-            if candidates:
-                best = target_process_detector.select_best_target()
-                if best:
-                    # Get GPU info
-                    gpu_name = "--"
-                    try:
-                        from app.performance.gpu_association import gpu_association_detector
-                        assoc = gpu_association_detector.detect_for_process(
-                            best.process_name, best.pid
-                        )
-                        if assoc.gpu_name:
-                            gpu_name = assoc.gpu_name
-                    except Exception:
-                        pass
-
-                    self.target_panel.set_detected(
-                        name=best.emulator,
-                        process=best.process_name,
-                        pid=best.pid,
-                        gpu=gpu_name,
-                    )
-                    return
-            self.target_panel.set_not_detected()
-        except Exception as e:
-            logger.debug(f"Target detection: {e}")
-            self.target_panel.set_not_detected()
-
-    def _update_metrics(self):
-        """Update all metric blocks from real telemetry."""
-        try:
-            from app.core.telemetry import telemetry_engine
-            frame = telemetry_engine.current
-
-            # CPU
-            if frame.cpu_utilization > 0:
-                self.cpu_block.set_value(
-                    f"{frame.cpu_utilization:.0f}",
-                    color=metric_color(frame.cpu_utilization),
-                    unit="%"
-                )
-            else:
-                self.cpu_block.set_value("--", color=TEXT_TERTIARY)
-
-            # GPU
-            if frame.gpu_utilization > 0:
-                self.gpu_block.set_value(
-                    f"{frame.gpu_utilization:.0f}",
-                    color=metric_color(frame.gpu_utilization),
-                    unit="%"
-                )
-            else:
-                self.gpu_block.set_value("--", color=TEXT_TERTIARY)
-
-            # RAM
-            if frame.ram_percent > 0:
-                self.ram_block.set_value(
-                    f"{frame.ram_percent:.0f}",
-                    color=metric_color(frame.ram_percent),
-                    unit="%"
-                )
-            else:
-                self.ram_block.set_value("--", color=TEXT_TERTIARY)
-
-            # GPU Temp
-            if frame.gpu_temp is not None and frame.gpu_temp > 0:
-                self.temp_block.set_value(
-                    f"{frame.gpu_temp:.0f}",
-                    color=temp_color(frame.gpu_temp),
-                    unit="°C"
-                )
-            else:
-                self.temp_block.set_value("N/A", color=TEXT_TERTIARY)
-
-            # FPS — only from PresentMon, never fabricated
-            self._update_fps()
-
-        except Exception as e:
-            logger.debug(f"Metrics update: {e}")
-
-    def _update_fps(self):
-        """Update FPS display from PresentMon only."""
-        try:
-            from app.performance.presentmon_provider import find_presentmon
-            pm_path = find_presentmon()
-
-            if not pm_path:
-                self.fps_block.set_value("N/A", color=TEXT_TERTIARY)
-                self.one_low_block.set_value("N/A", color=TEXT_TERTIARY)
-                self.frame_time_block.set_value("N/A", color=TEXT_TERTIARY)
-                self.stability_block.set_value("--", color=TEXT_TERTIARY)
-                return
-
-            # PresentMon is available but not currently capturing
-            self.fps_block.set_value("--", color=STATUS_MUTED)
-            self.one_low_block.set_value("--", color=STATUS_MUTED)
-            self.frame_time_block.set_value("--", color=STATUS_MUTED)
-            self.stability_block.set_value("--", color=STATUS_MUTED)
-
-        except Exception as e:
-            logger.debug(f"FPS update: {e}")
-
-    def _update_status(self):
-        """Update performance status and PresentMon indicator."""
-        try:
-            from app.core.telemetry import telemetry_engine
-            frame = telemetry_engine.current
-
-            # Performance status based on real data
-            if frame.cpu_utilization <= 0 and frame.gpu_utilization <= 0:
-                self.perf_status.setText("IDLE")
-                self.perf_status.setStyleSheet(f"""
-                    color: {STATUS_MUTED};
-                    font-family: {FONT_FAMILY};
-                    font-size: {FONT_SIZE_SM};
-                    font-weight: {WEIGHT_BOLD};
-                    border: none;
-                """)
-            elif frame.gpu_utilization > 90:
-                self.perf_status.setText("GPU LIMITED")
-                self.perf_status.setStyleSheet(f"""
-                    color: {STATUS_ERROR};
-                    font-family: {FONT_FAMILY};
-                    font-size: {FONT_SIZE_SM};
-                    font-weight: {WEIGHT_BOLD};
-                    border: none;
-                """)
-            elif frame.cpu_utilization > 90:
-                self.perf_status.setText("CPU LIMITED")
-                self.perf_status.setStyleSheet(f"""
-                    color: {STATUS_WARN};
-                    font-family: {FONT_FAMILY};
-                    font-size: {FONT_SIZE_SM};
-                    font-weight: {WEIGHT_BOLD};
-                    border: none;
-                """)
-            elif frame.gpu_temp and frame.gpu_temp > 85:
-                self.perf_status.setText("THERMAL WARNING")
-                self.perf_status.setStyleSheet(f"""
-                    color: {STATUS_ERROR};
-                    font-family: {FONT_FAMILY};
-                    font-size: {FONT_SIZE_SM};
-                    font-weight: {WEIGHT_BOLD};
-                    border: none;
-                """)
-            else:
-                self.perf_status.setText("STABLE")
-                self.perf_status.setStyleSheet(f"""
-                    color: {STATUS_OK};
-                    font-family: {FONT_FAMILY};
-                    font-size: {FONT_SIZE_SM};
-                    font-weight: {WEIGHT_BOLD};
-                    border: none;
-                """)
-
-            # PresentMon status
-            from app.performance.presentmon_provider import find_presentmon
-            pm_path = find_presentmon()
-            if pm_path:
-                self.pm_status.setText("PresentMon ● READY")
-                self.pm_status.setStyleSheet(f"""
-                    color: {STATUS_OK};
-                    font-family: {FONT_FAMILY};
-                    font-size: {FONT_SIZE_XS};
-                    border: none;
-                """)
-            else:
-                self.pm_status.setText("PresentMon ● UNAVAILABLE")
-                self.pm_status.setStyleSheet(f"""
-                    color: {STATUS_ERROR};
-                    font-family: {FONT_FAMILY};
-                    font-size: {FONT_SIZE_XS};
-                    border: none;
-                """)
-
-            # Hardware class
-            try:
-                from app.core.hardware_profile import analyze_hardware_profile
-                prof = analyze_hardware_profile()
-                self.hw_class_label.setText(prof.system_tier.value.upper())
-            except Exception:
-                self.hw_class_label.setText("")
-
-        except Exception as e:
-            logger.debug(f"Status update: {e}")
-
-    def _update_gaming_analysis(self):
-        """Update compact gaming analysis section."""
-        try:
-            from app.core.adaptive_optimizer import adaptive_optimizer
-            decision = adaptive_optimizer.analyze()
-
-            # Bottleneck
-            bn_name = decision.bottleneck.value
-            if bn_name == "UNKNOWN":
-                bn_name = "ANALYZING"
-            self.ga_bottleneck.setText(f"BOTTLENECK: {bn_name}")
-            bn_color = STATUS_MUTED
-            if decision.bottleneck_confidence > 0.7:
-                bn_color = STATUS_ERROR
-            elif decision.bottleneck_confidence > 0.4:
-                bn_color = STATUS_WARN
-            self.ga_bottleneck.setStyleSheet(f"""
-                color: {bn_color};
-                font-family: {FONT_MONO};
-                font-size: {FONT_SIZE_XS};
-                border: none;
-            """)
-
-            # Confidence
-            conf_pct = f"{decision.bottleneck_confidence:.0%}"
-            self.ga_confidence.setText(f"CONFIDENCE: {conf_pct}")
-
-            # Actions
-            applicable = sum(1 for o in decision.recommended_optimizations if o.status == "APPLICABLE")
-            total = len(decision.recommended_optimizations)
-            self.ga_actions.setText(f"ACTIONS: {applicable}/{total}")
-
-        except Exception as e:
-            logger.debug(f"Gaming analysis update: {e}")

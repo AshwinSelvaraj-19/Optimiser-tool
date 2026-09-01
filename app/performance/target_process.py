@@ -3,6 +3,7 @@ Target process identification — discovers emulator/game rendering processes.
 Identifies which process produces DXGI Present events.
 """
 
+import time
 import psutil
 from dataclasses import dataclass, field
 from typing import Optional
@@ -73,6 +74,11 @@ class TargetCandidate:
 
 class TargetProcessDetector:
     """Discovers running emulator processes and selects the best FPS target."""
+
+    def __init__(self):
+        self._candidates_cache = None
+        self._candidates_ts = 0.0
+        self._candidates_ttl = 3.0  # seconds
 
     def detect_all(self) -> list:
         """Find all running emulator processes."""
@@ -148,6 +154,9 @@ class TargetProcessDetector:
 
     def get_candidates(self) -> list:
         """Get sorted list of FPS measurement candidates."""
+        now = time.time()
+        if self._candidates_cache and (now - self._candidates_ts) < self._candidates_ttl:
+            return self._candidates_cache
         processes = self.detect_all()
         candidates = []
 
@@ -172,6 +181,8 @@ class TargetProcessDetector:
 
         # Sort by priority (lower = better) then confidence
         candidates.sort(key=lambda c: (-c.confidence, c.process_name))
+        self._candidates_cache = candidates
+        self._candidates_ts = time.time()
         return candidates
 
     def select_best_target(self) -> Optional[TargetCandidate]:
@@ -186,6 +197,11 @@ class TargetProcessDetector:
             return renderers[0]
 
         return candidates[0]
+
+    def invalidate_cache(self):
+        """Invalidate cached results."""
+        self._candidates_cache = None
+        self._candidates_ts = 0.0
 
     def get_all_running_pids(self) -> dict:
         """Get all emulator PIDs grouped by emulator name."""

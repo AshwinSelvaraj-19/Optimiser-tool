@@ -1178,28 +1178,36 @@ class OptimizerPage(QWidget):
         self._worker_thread = None
 
     def _update_target_fast(self):
-        """Fast immediate target display from existing cached target."""
+        """Fast immediate target display from last cached result or quick telemetry."""
         try:
-            from app.core.emulator_controller import emulator_controller
-            target = emulator_controller.detect_target()
-            if target:
+            # Use last worker result if available (no system call needed)
+            if self._last_result and self._last_result.target:
+                t = self._last_result.target
                 self.target_text.setText(
-                    f"{target.name} \u2022 PID {target.pid}\n"
-                    f"Priority: {target.priority_name} \u2022 CPUs: {target.affinity_cpus}/{target.total_cpus}\n"
-                    f"CPU: {target.cpu_percent:.0f}% \u2022 RAM: {target.memory_mb:.0f}MB"
+                    f"{t.name} \u2022 PID {t.pid}\n"
+                    f"Priority: {t.priority_name} \u2022 CPUs: {t.affinity_cpus}/{t.total_cpus}\n"
+                    f"CPU: {t.cpu_percent:.0f}% \u2022 RAM: {t.memory_mb:.0f}MB"
                 )
                 self.target_text.setStyleSheet(f"""
                     color: {STATUS_OK};
                     font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
                     border: none;
                 """)
-            else:
-                self.target_text.setText("No emulator detected")
-                self.target_text.setStyleSheet(f"""
-                    color: {TEXT_TERTIARY};
-                    font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
-                    border: none;
-                """)
+                return
+            # Fall back to quick opt_status if no worker result yet
+            if self._last_result and self._last_result.opt_status:
+                s = self._last_result.opt_status
+                tn = s.get("target_name", "")
+                tp = s.get("target_pid", 0)
+                if tn and tp:
+                    self.target_text.setText(f"{tn} \u2022 PID {tp}")
+                    self.target_text.setStyleSheet(f"""
+                        color: {STATUS_OK};
+                        font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+                        border: none;
+                    """)
+                    return
+            self.target_text.setText("Detecting...")
         except Exception:
             pass
 

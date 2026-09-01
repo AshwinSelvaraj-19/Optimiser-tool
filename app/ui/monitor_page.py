@@ -99,6 +99,12 @@ class TelemetryCard(QFrame):
         layout.addWidget(self.bar)
 
     def update_value(self, value: float, color: str = TEXT_PRIMARY):
+        # Skip expensive stylesheet rebuild if value unchanged
+        rounded = round(value, 1)
+        if hasattr(self, '_last_val') and self._last_val == rounded and self._last_color == color:
+            return
+        self._last_val = rounded
+        self._last_color = color
         self.value_label.setText(f"{value:.1f}")
         self.value_label.setStyleSheet(f"""
             color: {color};
@@ -110,6 +116,10 @@ class TelemetryCard(QFrame):
         self.bar.setValue(int(min(100, max(0, value))))
 
     def set_na(self):
+        if hasattr(self, '_last_val') and self._last_val is None:
+            return
+        self._last_val = None
+        self._last_color = None
         self.value_label.setText("N/A")
         self.value_label.setStyleSheet(f"""
             color: {TEXT_TERTIARY};
