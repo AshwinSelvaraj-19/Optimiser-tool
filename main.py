@@ -3803,6 +3803,102 @@ def main():
         print("=" * 55)
         return 0
 
+    if "--optimize-engine-run" in sys.argv:
+        from app.core.optimization_engine import optimization_engine
+        profile_id = "gaming"
+        mode = "auto"
+        for i, arg in enumerate(sys.argv):
+            if arg == "--profile" and i + 1 < len(sys.argv):
+                profile_id = sys.argv[i + 1]
+            if arg == "--mode" and i + 1 < len(sys.argv):
+                mode = sys.argv[i + 1]
+
+        result = optimization_engine.run(profile_id=profile_id, mode=mode)
+        print(result.format_cli())
+        return 0
+
+    if "--optimize-engine-dry-run" in sys.argv:
+        from app.core.optimization_engine import optimization_engine
+        profile_id = "gaming"
+        for i, arg in enumerate(sys.argv):
+            if arg == "--profile" and i + 1 < len(sys.argv):
+                profile_id = sys.argv[i + 1]
+
+        result = optimization_engine.run(profile_id=profile_id, mode="dry_run")
+        print(result.format_cli())
+        return 0
+
+    if "--optimize-engine-status" in sys.argv:
+        from app.core.optimization_engine import optimization_engine
+        status = optimization_engine.get_status()
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — OPTIMIZATION ENGINE STATUS")
+        print("=" * 55)
+        print(f"\n  Busy:   {status.is_busy}")
+        print(f"  Phase:  {status.current_phase}")
+        print(f"  Admin:  {status.is_admin}")
+        print(f"  Target: {status.target_name or 'None'} PID {status.target_pid}")
+        print(f"  History: {status.history_count} runs")
+
+        if status.last_run:
+            lr = status.last_run
+            print(f"\nLAST RUN")
+            print(f"  ID:       {lr['run_id']}")
+            print(f"  Profile:  {lr['profile_name'] or lr['profile_id']}")
+            print(f"  Target:   {lr['target_name'] or 'None'} PID {lr['target_pid']}")
+            print(f"  Verdict:  {lr['verdict']}")
+            print(f"  Duration: {lr['duration_seconds']:.1f}s")
+            print(f"  Applied:  {lr['applied_count']}")
+            print(f"  Kept:     {lr['kept_count']}")
+            print(f"  Rolled:   {lr['rolled_back_count']}")
+            print(f"  Failed:   {lr['failed_count']}")
+        else:
+            print(f"\n  No run recorded.")
+
+        print("\n" + "=" * 55)
+        return 0
+
+    if "--optimize-engine-rollback" in sys.argv:
+        from app.core.optimization_engine import optimization_engine
+        result = optimization_engine.rollback_last()
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — OPTIMIZATION ENGINE ROLLBACK")
+        print("=" * 55)
+        print(f"\n  Success: {result['success']}")
+        print(f"  Message: {result['message']}")
+        print("\n" + "=" * 55)
+        return 0
+
+    if "--optimize-engine-history" in sys.argv:
+        from app.core.optimization_engine import optimization_engine
+        count = 10
+        for i, arg in enumerate(sys.argv):
+            if arg == "--count" and i + 1 < len(sys.argv):
+                try:
+                    count = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+
+        history = optimization_engine.load_history(count)
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — OPTIMIZATION ENGINE HISTORY")
+        print("=" * 55)
+        print(f"\n  Recent runs: {len(history)}")
+        print("")
+
+        for run in history:
+            print(f"  {run.get('run_id', 'N/A')}  {run.get('profile_name', run.get('profile_id', 'N/A'))}")
+            print(f"    Verdict: {run.get('verdict', 'N/A')}  Target: {run.get('target_name', 'N/A')}")
+            print(f"    Applied: {run.get('kept_count', 0)}  Rolled back: {run.get('rolled_back_count', 0)}  Failed: {run.get('failed_count', 0)}")
+            print(f"    Duration: {run.get('duration_seconds', 0):.1f}s")
+            print("")
+
+        print("=" * 55)
+        return 0
+
     if "--session-start" in sys.argv:
         from app.performance.gaming_session_analyzer import gaming_session_analyzer
         from app.core.emulator_controller import emulator_controller

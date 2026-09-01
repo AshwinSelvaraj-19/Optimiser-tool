@@ -815,6 +815,36 @@ class OptimizerPage(QWidget):
 
         layout.addWidget(self.opt_session_frame)
 
+        # ── ENGINE STATUS ──
+        self.engine_frame = QFrame()
+        self.engine_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
+        engine_layout = QVBoxLayout(self.engine_frame)
+        engine_layout.setContentsMargins(12, 8, 12, 8)
+        engine_layout.setSpacing(3)
+
+        engine_header = QHBoxLayout()
+        engine_title = QLabel("ENGINE STATUS")
+        engine_title.setStyleSheet(card_title_style())
+        engine_header.addWidget(engine_title)
+        engine_header.addStretch()
+        self.engine_verdict_label = QLabel("")
+        self.engine_verdict_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_MONO};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        engine_header.addWidget(self.engine_verdict_label)
+        engine_layout.addLayout(engine_header)
+
+        self.engine_detail_label = QLabel("No optimization run")
+        self.engine_detail_label.setWordWrap(True)
+        self.engine_detail_label.setStyleSheet(f"""
+            color: {TEXT_SECONDARY}; font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        engine_layout.addWidget(self.engine_detail_label)
+
+        layout.addWidget(self.engine_frame)
+
         # ── INPUT & GAMEPLAY ──
         self.input_frame = QFrame()
         self.input_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
@@ -1082,6 +1112,7 @@ class OptimizerPage(QWidget):
             self._apply_responsiveness(result)
             self._apply_opt_session(result)
             self._apply_gaming_session(result)
+            self._apply_engine_status(result)
         except Exception as e:
             logger.debug(f"Apply result: {e}")
         # Clean up thread reference
@@ -2171,6 +2202,45 @@ class OptimizerPage(QWidget):
 
         except Exception as e:
             logger.debug(f"Responsiveness apply: {e}")
+
+    def _apply_engine_status(self, result: OptimizerWorkerResult):
+        """Apply optimization engine status from worker result."""
+        try:
+            from app.core.optimization_engine import optimization_engine
+            summary = optimization_engine.get_ui_summary()
+
+            verdict = summary.get("verdict", "N/A")
+            self.engine_verdict_label.setText(verdict)
+
+            from app.ui.theme import ACCENT_RED, TEXT_SECONDARY, TEXT_TERTIARY
+            if verdict in ("IMPROVED", "UNCHANGED", "ALL_OPTIMAL", "NO_ACTIONS"):
+                color = "#4CAF50"
+            elif verdict in ("DEGRADED",):
+                color = ACCENT_RED
+            else:
+                color = TEXT_TERTIARY
+            self.engine_verdict_label.setStyleSheet(f"""
+                color: {color}; font-family: {FONT_MONO};
+                font-size: {FONT_SIZE_XS}; border: none;
+            """)
+
+            bottleneck = summary.get("bottleneck", "N/A")
+            bn_conf = summary.get("bottleneck_confidence", 0)
+            adaptive = summary.get("adaptive_state", "N/A")
+            profile = summary.get("recommended_profile", "gaming")
+            actions = summary.get("actions", [])
+            kept = sum(1 for a in actions if a.get("verdict") == "APPLIED")
+            rolled = sum(1 for a in actions if a.get("verdict") == "ROLLED_BACK")
+
+            detail = f"Bottleneck: {bottleneck} ({bn_conf}%)"
+            detail += f"  |  State: {adaptive}"
+            detail += f"  |  Profile: {profile.upper()}"
+            if kept > 0 or rolled > 0:
+                detail += f"  |  Kept: {kept}  Rolled: {rolled}"
+            self.engine_detail_label.setText(detail)
+
+        except Exception as e:
+            logger.debug(f"Engine status apply: {e}")
 
     def _apply_gaming_session(self, result: OptimizerWorkerResult):
         """Apply gaming session status from worker result."""
