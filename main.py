@@ -4383,6 +4383,95 @@ def main():
             print(f"Profile '{profile_id}' not found.")
         return 0
 
+    # ── Phase 55: Benchmark Engine ───────────────────────────
+    if "--benchmark-run" in sys.argv:
+        from app.performance.benchmark_engine import benchmark_engine, BenchmarkType
+        import time as _time
+
+        btype = BenchmarkType.QUICK
+        duration = 5
+        for i, arg in enumerate(sys.argv):
+            if arg == "--type" and i + 1 < len(sys.argv):
+                val = sys.argv[i + 1].upper()
+                if val in ("QUICK", "GAMING", "SYSTEM"):
+                    btype = BenchmarkType(val)
+            if arg == "--duration" and i + 1 < len(sys.argv):
+                try:
+                    duration = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+
+        print(f"Capturing BEFORE snapshot...")
+        before = benchmark_engine.capture_snapshot(
+            label="BEFORE", benchmark_type=btype
+        )
+        print(f"  CPU: {before.cpu_percent:.1f}%  GPU: {before.gpu_utilization or 0:.1f}%  RAM: {before.ram_percent:.1f}%  FPS: {before.fps or 0:.0f}")
+        print(f"\nWaiting {duration}s for optimization changes...")
+        print(f"(Apply your optimizations now, then press Enter when ready)")
+        try:
+            input()
+        except EOFError:
+            _time.sleep(duration)
+
+        print(f"Capturing AFTER snapshot...")
+        session = benchmark_engine.run_benchmark(
+            benchmark_type=btype,
+            before_snapshot=before,
+            duration_seconds=0,
+        )
+        after = benchmark_engine.capture_snapshot(
+            label="AFTER", benchmark_type=btype
+        )
+        session.after = after
+        from app.performance.benchmark_engine import ComparisonEngine
+        session.metrics = ComparisonEngine.compare(before, after)
+        session.compute_verdict()
+        benchmark_engine.save_session(session)
+        print(benchmark_engine.format_session(session))
+        return 0
+
+    if "--benchmark-quick" in sys.argv:
+        from app.performance.benchmark_engine import benchmark_engine, BenchmarkType
+
+        print("Running quick benchmark...")
+        session = benchmark_engine.run_benchmark(
+            benchmark_type=BenchmarkType.QUICK,
+            duration_seconds=5,
+        )
+        benchmark_engine.save_session(session)
+        print(benchmark_engine.format_session(session))
+        return 0
+
+    if "--benchmark-history" in sys.argv:
+        from app.performance.benchmark_engine import benchmark_engine
+
+        history = benchmark_engine.history
+        print("=" * 55)
+        print("  BENCHMARK HISTORY")
+        print("=" * 55)
+        if history:
+            for h in history[-10:]:
+                btype = h.get("benchmark_type", "?")
+                verdict = h.get("verdict", "?")
+                improved = h.get("improved", 0)
+                degraded = h.get("degraded", 0)
+                print(f"  {h['session_id']:<16} {btype:<10} {verdict:<18} +{improved}/-{degraded}")
+        else:
+            print("  No benchmark history.")
+        print("\n" + "=" * 55)
+        return 0
+
+    if "--benchmark-export" in sys.argv:
+        from app.performance.benchmark_engine import benchmark_engine
+        import json as _json
+
+        data = benchmark_engine.export_session()
+        if data:
+            print(_json.dumps(data, indent=2))
+        else:
+            print("No benchmark session to export.")
+        return 0
+
     if "--final-validation" in sys.argv:
         from app.core.validation_engine import run_final_validation
 
