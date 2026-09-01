@@ -170,9 +170,21 @@ class CleanupPage(QWidget):
         self._setup_ui()
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(10)
+        from PySide6.QtWidgets import QScrollArea as _SA
+        from PySide6.QtCore import Qt as _Qt
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = _SA()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(_Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
+        scroll_content = QWidget()
+        layout = QVBoxLayout(scroll_content)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(6)
+        scroll.setWidget(scroll_content)
+        outer.addWidget(scroll)
 
         # ── Header ──────────────────────────────────────────
         header = QHBoxLayout()

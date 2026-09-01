@@ -167,9 +167,20 @@ class OptimizerPage(QWidget):
         self._setup_ui()
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(10)
+        # Wrap entire page in scroll area for compact panel
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
+        scroll_content = QWidget()
+        layout = QVBoxLayout(scroll_content)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(6)
+        scroll.setWidget(scroll_content)
+        outer.addWidget(scroll)
 
         # Header
         header = QHBoxLayout()
@@ -258,19 +269,13 @@ class OptimizerPage(QWidget):
 
         layout.addWidget(status_frame)
 
-        # Optimization list
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
-
+        # Optimization list (no separate scroll — parent scrolls)
         self.opt_container = QWidget()
         self.opt_layout = QVBoxLayout(self.opt_container)
         self.opt_layout.setContentsMargins(0, 0, 0, 0)
         self.opt_layout.setSpacing(3)
         self.opt_layout.addStretch()
-
-        scroll.setWidget(self.opt_container)
-        layout.addWidget(scroll, 1)
+        layout.addWidget(self.opt_container)
 
         # Progress
         self.progress_bar = QProgressBar()

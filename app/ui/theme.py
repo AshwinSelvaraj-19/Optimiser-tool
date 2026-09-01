@@ -118,8 +118,11 @@ def global_stylesheet() -> str:
         QMainWindow {{
             background-color: {BG_PRIMARY};
         }}
-        QWidget {{
+        QWidget#centralWidget {{
             background-color: {BG_PRIMARY};
+        }}
+        QWidget {{
+            background-color: transparent;
             color: {TEXT_PRIMARY};
             font-family: {FONT_FAMILY};
             font-size: {FONT_SIZE_MD};
