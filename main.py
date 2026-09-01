@@ -3899,6 +3899,108 @@ def main():
         print("=" * 55)
         return 0
 
+    if "--gaming-opt-status" in sys.argv:
+        from app.core.gaming_optimization import gaming_session_manager
+        summary = gaming_session_manager.get_ui_summary()
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — GAMING OPTIMIZATION STATUS")
+        print("=" * 55)
+        print(f"\n  State:    {summary['state']}")
+        print(f"  Target:   {summary['target_name'] or 'None'} PID {summary['target_pid']}")
+        print(f"  Duration: {summary['duration_seconds']:.0f}s")
+        print(f"  Ticks:    {summary['total_ticks']}")
+        print(f"  Applied:  {summary['optimizations_applied']}")
+        print("")
+
+        if summary['baseline_cpu'] is not None:
+            print("  BASELINE")
+            print(f"    CPU: {summary['baseline_cpu']:.1f}%  GPU: {summary['baseline_gpu'] or 0:.1f}%  RAM: {summary['baseline_ram'] or 0:.1f}%")
+            if summary['baseline_fps'] is not None:
+                print(f"    FPS: {summary['baseline_fps']:.1f}")
+            print("")
+
+        print("  CURRENT")
+        if summary['cpu'] is not None:
+            print(f"    CPU: {summary['cpu']:.1f}%  GPU: {summary['gpu'] or 0:.1f}%  RAM: {summary['ram'] or 0:.1f}%")
+        if summary['fps'] is not None:
+            print(f"    FPS: {summary['fps']:.1f}  Frame: {summary['frame_time'] or 0:.1f}ms")
+        if summary['gpu_temp'] is not None:
+            print(f"    GPU Temp: {summary['gpu_temp']:.0f}°C")
+
+        print("")
+        print(f"  Last Action: {summary['last_action']}")
+        print(f"  Last Reason: {summary['last_reason']}")
+        print("\n" + "=" * 55)
+        return 0
+
+    if "--gaming-opt-start" in sys.argv:
+        from app.core.gaming_optimization import gaming_session_manager
+        profile_id = "gaming"
+        for i, arg in enumerate(sys.argv):
+            if arg == "--profile" and i + 1 < len(sys.argv):
+                profile_id = sys.argv[i + 1]
+
+        session = gaming_session_manager.start_session(profile_id=profile_id)
+        print("=" * 55)
+        print("HEAVEN SOCIETY — GAMING SESSION STARTED")
+        print("=" * 55)
+        print(f"\n  Session:  {session.session_id}")
+        print(f"  Target:   {session.target_name or 'None'} PID {session.target_pid}")
+        print(f"  State:    {session.state}")
+        print(f"  Profile:  {profile_id}")
+        print("\n" + "=" * 55)
+        return 0
+
+    if "--gaming-opt-stop" in sys.argv:
+        from app.core.gaming_optimization import gaming_session_manager
+        session = gaming_session_manager.stop_session()
+        print(session.format_cli())
+        return 0
+
+    if "--gaming-opt-tick" in sys.argv:
+        from app.core.gaming_optimization import gaming_session_manager
+        ticks = 5
+        for i, arg in enumerate(sys.argv):
+            if arg == "--ticks" and i + 1 < len(sys.argv):
+                try:
+                    ticks = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+
+        if not gaming_session_manager.is_active:
+            gaming_session_manager.start_session()
+
+        for i in range(ticks):
+            decision = gaming_session_manager.tick()
+            if decision:
+                print(f"  Tick {i+1}: {decision.action.value} — {decision.reason}")
+            else:
+                print(f"  Tick {i+1}: no decision")
+            time.sleep(2)
+
+        summary = gaming_session_manager.get_ui_summary()
+        print(f"\n  State: {summary['state']}  Ticks: {summary['total_ticks']}  Applied: {summary['optimizations_applied']}")
+        return 0
+
+    if "--gaming-opt-report" in sys.argv:
+        from app.core.gaming_optimization import gaming_session_manager
+        history = gaming_session_manager.load_history(5)
+
+        print("=" * 55)
+        print("HEAVEN SOCIETY — GAMING OPTIMIZATION HISTORY")
+        print("=" * 55)
+        print(f"\n  Recent sessions: {len(history)}")
+        print("")
+
+        for s in history:
+            print(f"  {s.get('session_id', 'N/A')}  Target: {s.get('target_name', 'N/A')}")
+            print(f"    Duration: {s.get('duration_seconds', 0):.0f}s  Applied: {s.get('optimizations_applied', 0)}  Ticks: {s.get('total_ticks', 0)}")
+            print("")
+
+        print("=" * 55)
+        return 0
+
     if "--session-start" in sys.argv:
         from app.performance.gaming_session_analyzer import gaming_session_analyzer
         from app.core.emulator_controller import emulator_controller

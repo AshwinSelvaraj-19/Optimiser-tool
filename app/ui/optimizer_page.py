@@ -947,6 +947,40 @@ class OptimizerPage(QWidget):
         gs_header.addWidget(self.gs_state_label)
         gs_layout.addLayout(gs_header)
 
+        # Metrics grid
+        gs_grid = QHBoxLayout()
+        gs_grid.setSpacing(6)
+
+        gs_cpu_lbl = QLabel("CPU")
+        gs_cpu_lbl.setStyleSheet(f"color: {TEXT_TERTIARY}; font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS}; border: none;")
+        gs_gpu_lbl = QLabel("GPU")
+        gs_gpu_lbl.setStyleSheet(f"color: {TEXT_TERTIARY}; font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS}; border: none;")
+        gs_ram_lbl = QLabel("RAM")
+        gs_ram_lbl.setStyleSheet(f"color: {TEXT_TERTIARY}; font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS}; border: none;")
+        gs_fps_lbl = QLabel("FPS")
+        gs_fps_lbl.setStyleSheet(f"color: {TEXT_TERTIARY}; font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS}; border: none;")
+
+        for lbl in [gs_cpu_lbl, gs_gpu_lbl, gs_ram_lbl, gs_fps_lbl]:
+            gs_grid.addWidget(lbl)
+        gs_layout.addLayout(gs_grid)
+
+        gs_vals = QHBoxLayout()
+        gs_vals.setSpacing(6)
+
+        self.gs_cpu_val = QLabel("--")
+        self.gs_cpu_val.setStyleSheet(f"color: {TEXT_PRIMARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;")
+        self.gs_gpu_val = QLabel("--")
+        self.gs_gpu_val.setStyleSheet(f"color: {TEXT_PRIMARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;")
+        self.gs_ram_val = QLabel("--")
+        self.gs_ram_val.setStyleSheet(f"color: {TEXT_PRIMARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;")
+        self.gs_fps_val = QLabel("--")
+        self.gs_fps_val.setStyleSheet(f"color: {TEXT_PRIMARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;")
+
+        for lbl in [self.gs_cpu_val, self.gs_gpu_val, self.gs_ram_val, self.gs_fps_val]:
+            gs_vals.addWidget(lbl)
+        gs_layout.addLayout(gs_vals)
+
+        # Detail labels
         self.gs_detail_label = QLabel("No active session")
         self.gs_detail_label.setWordWrap(True)
         self.gs_detail_label.setStyleSheet(f"""
@@ -954,6 +988,14 @@ class OptimizerPage(QWidget):
             font-size: {FONT_SIZE_XS}; border: none;
         """)
         gs_layout.addWidget(self.gs_detail_label)
+
+        self.gs_action_label = QLabel("")
+        self.gs_action_label.setWordWrap(True)
+        self.gs_action_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS}; border: none;
+        """)
+        gs_layout.addWidget(self.gs_action_label)
 
         layout.addWidget(self.gaming_session_frame)
 
@@ -2243,22 +2285,57 @@ class OptimizerPage(QWidget):
             logger.debug(f"Engine status apply: {e}")
 
     def _apply_gaming_session(self, result: OptimizerWorkerResult):
-        """Apply gaming session status from worker result."""
+        """Apply gaming optimization session status from worker result."""
         try:
-            from app.performance.gaming_session_analyzer import gaming_session_analyzer
-            status = gaming_session_analyzer.get_session_status()
+            from app.core.gaming_optimization import gaming_session_manager
+            summary = gaming_session_manager.get_ui_summary()
 
-            state = status.get("state", "IDLE")
+            state = summary.get("state", "IDLE")
             self.gs_state_label.setText(state)
 
-            detail = f"Target: {status.get('target_name') or 'None'} PID {status.get('target_pid', 0)}"
-            detail += f"  |  Duration: {status.get('duration_seconds', 0):.0f}s"
-            detail += f"  |  Samples: {status.get('sample_count', 0)}  Events: {status.get('event_count', 0)}"
+            # Color the state
+            if state in ("GAMING",):
+                color = STATUS_OK
+            elif state in ("DEGRADED",):
+                color = STATUS_WARN
+            elif state in ("OPTIMIZING", "STARTING"):
+                color = ACCENT_LIGHT
+            else:
+                color = TEXT_TERTIARY
+            self.gs_state_label.setStyleSheet(f"""
+                color: {color}; font-family: {FONT_MONO};
+                font-size: {FONT_SIZE_XS}; border: none;
+            """)
 
-            if status.get("last_report_score") is not None:
-                detail += f"  |  Score: {status['last_report_score']}/100 ({status.get('last_report_root_cause', 'N/A')})"
+            # Update metrics
+            cpu = summary.get("cpu")
+            gpu = summary.get("gpu")
+            ram = summary.get("ram")
+            fps = summary.get("fps")
+            self.gs_cpu_val.setText(f"{cpu:.0f}%" if cpu is not None else "--")
+            self.gs_gpu_val.setText(f"{gpu:.0f}%" if gpu is not None else "--")
+            self.gs_ram_val.setText(f"{ram:.0f}%" if ram is not None else "--")
+            self.gs_fps_val.setText(f"{fps:.0f}" if fps is not None else "--")
 
+            # Detail
+            target = summary.get("target_name") or "None"
+            pid = summary.get("target_pid", 0)
+            duration = summary.get("duration_seconds", 0)
+            ticks = summary.get("total_ticks", 0)
+            applied = summary.get("optimizations_applied", 0)
+            detail = f"Target: {target} PID {pid}"
+            detail += f"  |  Duration: {duration:.0f}s  Ticks: {ticks}"
+            if applied > 0:
+                detail += f"  |  Applied: {applied}"
             self.gs_detail_label.setText(detail)
+
+            # Action
+            last_action = summary.get("last_action", "NONE")
+            last_reason = summary.get("last_reason", "")
+            if last_action != "NONE" and last_action != "MONITOR_ONLY":
+                self.gs_action_label.setText(f"Last: {last_action} — {last_reason}")
+            else:
+                self.gs_action_label.setText("")
 
         except Exception as e:
             logger.debug(f"Gaming session apply: {e}")
