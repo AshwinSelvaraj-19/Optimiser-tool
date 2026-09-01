@@ -27,6 +27,8 @@ from app.ui.theme import (
     SPACING_SM, SPACING_MD, SPACING_LG, SPACING_XL,
     metric_color, temp_color, card_style, button_primary_style,
     button_secondary_style,
+    section_header_style, metric_title_style, metric_value_style,
+    unit_label_style, status_indicator_style,
 )
 from app.utils.logger import get_logger
 from app.ui.home_page_worker import HomePageWorkerThread, HomePageResult
@@ -51,32 +53,14 @@ class MetricBlock(QFrame):
         layout.setSpacing(2)
 
         self.title_label = QLabel(title)
-        self.title_label.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_SEMIBOLD};
-            letter-spacing: 1px;
-            border: none;
-        """)
+        self.title_label.setStyleSheet(metric_title_style())
 
         self.value_label = QLabel("--")
-        self.value_label.setStyleSheet(f"""
-            color: {TEXT_PRIMARY};
-            font-family: {FONT_MONO};
-            font-size: {FONT_SIZE_LG};
-            font-weight: {WEIGHT_BOLD};
-            border: none;
-        """)
+        self.value_label.setStyleSheet(metric_value_style())
         self.value_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
         self.unit_label = QLabel("")
-        self.unit_label.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            border: none;
-        """)
+        self.unit_label.setStyleSheet(unit_label_style())
 
         self._last_value = "--"
         self._last_color = TEXT_PRIMARY
@@ -97,13 +81,7 @@ class MetricBlock(QFrame):
         self._last_color = color
         self._last_unit = unit
         self.value_label.setText(value)
-        self.value_label.setStyleSheet(f"""
-            color: {color};
-            font-family: {FONT_MONO};
-            font-size: {FONT_SIZE_LG};
-            font-weight: {WEIGHT_BOLD};
-            border: none;
-        """)
+        self.value_label.setStyleSheet(metric_value_style(color))
         self.unit_label.setText(unit)
 
 
@@ -447,14 +425,7 @@ class HomePage(QWidget):
 
         # ── Section: TARGET ──────────────────────────────────
         section_target = QLabel("TARGET")
-        section_target.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 2px;
-            border: none;
-        """)
+        section_target.setStyleSheet(section_header_style())
         layout.addWidget(section_target)
 
         self.target_panel = TargetPanel()
@@ -462,14 +433,7 @@ class HomePage(QWidget):
 
         # ── Section: PERFORMANCE ─────────────────────────────
         section_perf = QLabel("PERFORMANCE")
-        section_perf.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 2px;
-            border: none;
-        """)
+        section_perf.setStyleSheet(section_header_style())
         layout.addWidget(section_perf)
 
         # FPS row
@@ -491,14 +455,7 @@ class HomePage(QWidget):
 
         # ── Section: SYSTEM ──────────────────────────────────
         section_sys = QLabel("SYSTEM")
-        section_sys.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 2px;
-            border: none;
-        """)
+        section_sys.setStyleSheet(section_header_style())
         layout.addWidget(section_sys)
 
         sys_grid = QHBoxLayout()
@@ -575,14 +532,7 @@ class HomePage(QWidget):
 
         # ── Section: GAMING ANALYSIS ─────────────────────────
         section_ga = QLabel("GAMING ANALYSIS")
-        section_ga.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 2px;
-            border: none;
-        """)
+        section_ga.setStyleSheet(section_header_style())
         layout.addWidget(section_ga)
         self._hidden_widgets.append(section_ga)
 

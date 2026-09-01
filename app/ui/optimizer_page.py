@@ -19,6 +19,9 @@ from app.ui.theme import (
     FONT_SIZE_SM, FONT_SIZE_XS,
     WEIGHT_BOLD, WEIGHT_SEMIBOLD, WEIGHT_MEDIUM,
     RADIUS_MD, card_style, button_primary_style, button_secondary_style,
+    card_title_style, opt_row_style, opt_row_name_style,
+    opt_row_value_style, opt_row_status_style, loading_placeholder_style,
+    no_data_style, status_indicator_style, metric_value_sm_style,
 )
 from app.core.profiles import get_all_profiles
 from app.core.optimizer import optimizer
@@ -36,63 +39,29 @@ class OptRow(QFrame):
         super().__init__(parent)
         self.setFrameStyle(QFrame.NoFrame)
         self.setFixedHeight(32)
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {BG_PANEL};
-                border: 1px solid {BORDER_LIGHT};
-                border-radius: {RADIUS_MD};
-            }}
-        """)
+        self.setStyleSheet(opt_row_style())
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 2, 10, 2)
         layout.setSpacing(8)
 
         self.name_label = QLabel(name)
-        self.name_label.setStyleSheet(f"""
-            color: {TEXT_PRIMARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_SM};
-            font-weight: {WEIGHT_MEDIUM};
-            border: none;
-        """)
+        self.name_label.setStyleSheet(opt_row_name_style())
         layout.addWidget(self.name_label, 1)
 
         if value:
             self.value_label = QLabel(value)
-            self.value_label.setStyleSheet(f"""
-                color: {TEXT_SECONDARY};
-                font-family: {FONT_MONO};
-                font-size: {FONT_SIZE_XS};
-                border: none;
-            """)
+            self.value_label.setStyleSheet(opt_row_value_style())
             layout.addWidget(self.value_label)
 
         self.status_label = QLabel("")
         self.status_label.setFixedWidth(110)
         self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_SEMIBOLD};
-            border-radius: 3px;
-            padding: 2px 4px;
-            border: none;
-        """)
+        self.status_label.setStyleSheet(opt_row_status_style())
         layout.addWidget(self.status_label)
 
     def set_status(self, status: str, color: str = TEXT_TERTIARY):
         self.status_label.setText(status)
-        self.status_label.setStyleSheet(f"""
-            color: {color};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_SEMIBOLD};
-            background-color: {color}15;
-            border-radius: 3px;
-            padding: 2px 4px;
-            border: none;
-        """)
+        self.status_label.setStyleSheet(opt_row_status_style(color))
 
 
 class ApplyThread(QThread):
@@ -320,14 +289,7 @@ class OptimizerPage(QWidget):
 
         win_header = QHBoxLayout()
         win_title = QLabel("WINDOWS GAMING")
-        win_title.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 1px;
-            border: none;
-        """)
+        win_title.setStyleSheet(card_title_style())
         win_header.addWidget(win_title)
         win_header.addStretch()
         self.win_status_label = QLabel("")
@@ -364,14 +326,7 @@ class OptimizerPage(QWidget):
 
         bench_header = QHBoxLayout()
         bench_title = QLabel("BENCHMARK")
-        bench_title.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 1px;
-            border: none;
-        """)
+        bench_title.setStyleSheet(card_title_style())
         bench_header.addWidget(bench_title)
         bench_header.addStretch()
 
@@ -446,14 +401,7 @@ class OptimizerPage(QWidget):
 
         res_header = QHBoxLayout()
         res_title = QLabel("RESOURCES")
-        res_title.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 1px;
-            border: none;
-        """)
+        res_title.setStyleSheet(card_title_style())
         res_header.addWidget(res_title)
         res_header.addStretch()
         self.res_bottleneck_label = QLabel("")
@@ -518,14 +466,7 @@ class OptimizerPage(QWidget):
 
         bg_header = QHBoxLayout()
         bg_title = QLabel("BACKGROUND LOAD")
-        bg_title.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 1px;
-            border: none;
-        """)
+        bg_title.setStyleSheet(card_title_style())
         bg_header.addWidget(bg_title)
         bg_header.addStretch()
         self.bg_impact_label = QLabel("")
@@ -585,14 +526,7 @@ class OptimizerPage(QWidget):
 
         mem_header = QHBoxLayout()
         mem_title = QLabel("MEMORY")
-        mem_title.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 1px;
-            border: none;
-        """)
+        mem_title.setStyleSheet(card_title_style())
         mem_header.addWidget(mem_title)
         mem_header.addStretch()
         self.mem_pressure_label = QLabel("")
@@ -656,14 +590,7 @@ class OptimizerPage(QWidget):
 
         startup_header = QHBoxLayout()
         startup_title = QLabel("STARTUP")
-        startup_title.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 1px;
-            border: none;
-        """)
+        startup_title.setStyleSheet(card_title_style())
         startup_header.addWidget(startup_title)
         startup_header.addStretch()
         self.startup_count_label = QLabel("")
@@ -723,14 +650,7 @@ class OptimizerPage(QWidget):
 
         telem_header = QHBoxLayout()
         telem_title = QLabel("TELEMETRY")
-        telem_title.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 1px;
-            border: none;
-        """)
+        telem_title.setStyleSheet(card_title_style())
         telem_header.addWidget(telem_title)
         telem_header.addStretch()
         self.telemetry_status_label = QLabel("--")
@@ -792,10 +712,7 @@ class OptimizerPage(QWidget):
 
         rec_header = QHBoxLayout()
         rec_title = QLabel("RECOMMENDATIONS")
-        rec_title.setStyleSheet(f"""
-            color: {TEXT_PRIMARY}; font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
-        """)
+        rec_title.setStyleSheet(card_title_style())
         rec_header.addWidget(rec_title)
         rec_header.addStretch()
         self.rec_quality_label = QLabel("")
@@ -840,10 +757,7 @@ class OptimizerPage(QWidget):
 
         adapt_header = QHBoxLayout()
         adapt_title = QLabel("ADAPTIVE OPTIMIZATION")
-        adapt_title.setStyleSheet(f"""
-            color: {TEXT_PRIMARY}; font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
-        """)
+        adapt_title.setStyleSheet(card_title_style())
         adapt_header.addWidget(adapt_title)
         adapt_header.addStretch()
         self.adaptive_state_label = QLabel("")
@@ -880,10 +794,7 @@ class OptimizerPage(QWidget):
 
         sess_header = QHBoxLayout()
         sess_title = QLabel("OPTIMIZATION SESSION")
-        sess_title.setStyleSheet(f"""
-            color: {TEXT_PRIMARY}; font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
-        """)
+        sess_title.setStyleSheet(card_title_style())
         sess_header.addWidget(sess_title)
         sess_header.addStretch()
         self.opt_session_status_label = QLabel("")
@@ -913,10 +824,7 @@ class OptimizerPage(QWidget):
 
         input_header = QHBoxLayout()
         input_title = QLabel("INPUT & GAMEPLAY")
-        input_title.setStyleSheet(f"""
-            color: {TEXT_PRIMARY}; font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
-        """)
+        input_title.setStyleSheet(card_title_style())
         input_header.addWidget(input_title)
         input_header.addStretch()
         self.input_score_label = QLabel("")
@@ -961,10 +869,7 @@ class OptimizerPage(QWidget):
 
         resp_header = QHBoxLayout()
         resp_title = QLabel("RESPONSIVENESS")
-        resp_title.setStyleSheet(f"""
-            color: {TEXT_PRIMARY}; font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
-        """)
+        resp_title.setStyleSheet(card_title_style())
         resp_header.addWidget(resp_title)
         resp_header.addStretch()
         self.resp_score_label = QLabel("")
@@ -1001,10 +906,7 @@ class OptimizerPage(QWidget):
 
         gs_header = QHBoxLayout()
         gs_title = QLabel("GAMING SESSION")
-        gs_title.setStyleSheet(f"""
-            color: {TEXT_PRIMARY}; font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_SM}; font-weight: {WEIGHT_BOLD}; border: none;
-        """)
+        gs_title.setStyleSheet(card_title_style())
         gs_header.addWidget(gs_title)
         gs_header.addStretch()
         self.gs_state_label = QLabel("")

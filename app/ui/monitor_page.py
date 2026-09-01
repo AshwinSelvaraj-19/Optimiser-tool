@@ -20,6 +20,9 @@ from app.ui.theme import (
     FONT_SIZE_LG, FONT_SIZE_SM, FONT_SIZE_XS,
     WEIGHT_BOLD, WEIGHT_SEMIBOLD, WEIGHT_MEDIUM,
     RADIUS_MD, card_style, metric_color, temp_color,
+    section_header_style, card_title_style, metric_title_style,
+    metric_value_style, unit_label_style, status_indicator_style,
+    no_data_style, loading_placeholder_style,
 )
 from app.core.telemetry import telemetry_engine
 from app.utils.logger import get_logger
@@ -46,32 +49,14 @@ class TelemetryCard(QFrame):
         layout.setSpacing(2)
 
         self.title_label = QLabel(title)
-        self.title_label.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_SEMIBOLD};
-            letter-spacing: 1px;
-            border: none;
-        """)
+        self.title_label.setStyleSheet(metric_title_style())
 
         self.value_label = QLabel("--")
-        self.value_label.setStyleSheet(f"""
-            color: {TEXT_PRIMARY};
-            font-family: {FONT_MONO};
-            font-size: {FONT_SIZE_LG};
-            font-weight: {WEIGHT_BOLD};
-            border: none;
-        """)
+        self.value_label.setStyleSheet(metric_value_style())
         self.value_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
         self.unit_label = QLabel(unit)
-        self.unit_label.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            border: none;
-        """)
+        self.unit_label.setStyleSheet(unit_label_style())
 
         layout.addWidget(self.title_label)
         h = QHBoxLayout()
@@ -107,13 +92,7 @@ class TelemetryCard(QFrame):
         self._last_val = rounded
         self._last_color = color
         self.value_label.setText(f"{value:.1f}")
-        self.value_label.setStyleSheet(f"""
-            color: {color};
-            font-family: {FONT_MONO};
-            font-size: {FONT_SIZE_LG};
-            font-weight: {WEIGHT_BOLD};
-            border: none;
-        """)
+        self.value_label.setStyleSheet(metric_value_style(color))
         self.bar.setValue(int(min(100, max(0, value))))
 
     def set_na(self):
@@ -194,15 +173,7 @@ class MonitorPage(QWidget):
 
         # FPS section
         fps_label = QLabel("FRAME TELEMETRY")
-        fps_label.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 2px;
-            border: none;
-            margin-top: 4px;
-        """)
+        fps_label.setStyleSheet(section_header_style())
         layout.addWidget(fps_label)
 
         fps_grid = QGridLayout()
@@ -228,14 +199,7 @@ class MonitorPage(QWidget):
 
         resp_header = QHBoxLayout()
         resp_title = QLabel("INPUT RESPONSIVENESS")
-        resp_title.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 1px;
-            border: none;
-        """)
+        resp_title.setStyleSheet(card_title_style())
         resp_header.addWidget(resp_title)
         resp_header.addStretch()
         self.resp_score_label = QLabel("")
@@ -287,14 +251,7 @@ class MonitorPage(QWidget):
 
         thermal_header = QHBoxLayout()
         thermal_title = QLabel("THERMAL")
-        thermal_title.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 1px;
-            border: none;
-        """)
+        thermal_title.setStyleSheet(card_title_style())
         thermal_header.addWidget(thermal_title)
         thermal_header.addStretch()
         self.thermal_state_label = QLabel("")
@@ -348,14 +305,7 @@ class MonitorPage(QWidget):
         bn_layout.setSpacing(3)
 
         bn_header = QLabel("BOTTLENECK")
-        bn_header.setStyleSheet(f"""
-            color: {TEXT_TERTIARY};
-            font-family: {FONT_FAMILY};
-            font-size: {FONT_SIZE_XS};
-            font-weight: {WEIGHT_BOLD};
-            letter-spacing: 1px;
-            border: none;
-        """)
+        bn_header.setStyleSheet(card_title_style())
         bn_layout.addWidget(bn_header)
 
         self.bottleneck_name = QLabel("ANALYZING...")

@@ -328,3 +328,206 @@ def status_badge(text: str, color: str) -> str:
         f'border-radius:3px;'
         f'">{text}</span>'
     )
+
+
+# ============================================================
+# REUSABLE COMPONENT STYLES
+# ============================================================
+
+
+def section_header_style() -> str:
+    """Style for section header labels (e.g. TARGET, PERFORMANCE)."""
+    return f"""
+        color: {TEXT_TERTIARY};
+        font-family: {FONT_FAMILY};
+        font-size: {FONT_SIZE_XS};
+        font-weight: {WEIGHT_BOLD};
+        letter-spacing: 2px;
+        border: none;
+    """
+
+
+def card_title_style() -> str:
+    """Style for card/panel title labels."""
+    return f"""
+        color: {TEXT_TERTIARY};
+        font-family: {FONT_FAMILY};
+        font-size: {FONT_SIZE_XS};
+        font-weight: {WEIGHT_BOLD};
+        letter-spacing: 1px;
+        border: none;
+    """
+
+
+def metric_title_style() -> str:
+    """Style for metric block title labels (CPU, GPU, etc)."""
+    return f"""
+        color: {TEXT_TERTIARY};
+        font-family: {FONT_FAMILY};
+        font-size: {FONT_SIZE_XS};
+        font-weight: {WEIGHT_SEMIBOLD};
+        letter-spacing: 1px;
+        border: none;
+    """
+
+
+def metric_value_style(color: str = TEXT_PRIMARY) -> str:
+    """Style for metric block value labels."""
+    return f"""
+        color: {color};
+        font-family: {FONT_MONO};
+        font-size: {FONT_SIZE_LG};
+        font-weight: {WEIGHT_BOLD};
+        border: none;
+    """
+
+
+def metric_value_sm_style(color: str = TEXT_PRIMARY) -> str:
+    """Style for small metric value labels."""
+    return f"""
+        color: {color};
+        font-family: {FONT_MONO};
+        font-size: {FONT_SIZE_SM};
+        font-weight: {WEIGHT_BOLD};
+        border: none;
+    """
+
+
+def unit_label_style() -> str:
+    """Style for unit labels (%, ms, etc)."""
+    return f"""
+        color: {TEXT_TERTIARY};
+        font-family: {FONT_FAMILY};
+        font-size: {FONT_SIZE_XS};
+        border: none;
+    """
+
+
+def body_text_style(color: str = TEXT_SECONDARY) -> str:
+    """Style for body text labels."""
+    return f"""
+        color: {color};
+        font-family: {FONT_FAMILY};
+        font-size: {FONT_SIZE_SM};
+        border: none;
+    """
+
+
+def mono_text_style(color: str = TEXT_SECONDARY) -> str:
+    """Style for monospace text labels."""
+    return f"""
+        color: {color};
+        font-family: {FONT_MONO};
+        font-size: {FONT_SIZE_XS};
+        border: none;
+    """
+
+
+def status_indicator_style(color: str = TEXT_TERTIARY) -> str:
+    """Style for status indicator labels (score, confidence, etc)."""
+    return f"""
+        color: {color};
+        font-family: {FONT_MONO};
+        font-size: {FONT_SIZE_XS};
+        font-weight: {WEIGHT_BOLD};
+        border: none;
+    """
+
+
+def opt_row_style() -> str:
+    """Style for optimization status rows."""
+    return f"""
+        background-color: {BG_PANEL};
+        border: 1px solid {BORDER_LIGHT};
+        border-radius: {RADIUS_MD};
+    """
+
+
+def opt_row_name_style() -> str:
+    """Style for optimization row name labels."""
+    return f"""
+        color: {TEXT_PRIMARY};
+        font-family: {FONT_FAMILY};
+        font-size: {FONT_SIZE_SM};
+        font-weight: {WEIGHT_MEDIUM};
+        border: none;
+    """
+
+
+def opt_row_value_style() -> str:
+    """Style for optimization row value labels."""
+    return f"""
+        color: {TEXT_SECONDARY};
+        font-family: {FONT_MONO};
+        font-size: {FONT_SIZE_XS};
+        border: none;
+    """
+
+
+def opt_row_status_style(color: str = TEXT_TERTIARY) -> str:
+    """Style for optimization row status badges."""
+    return f"""
+        color: {color};
+        font-family: {FONT_FAMILY};
+        font-size: {FONT_SIZE_XS};
+        font-weight: {WEIGHT_SEMIBOLD};
+        background-color: {color}15;
+        border-radius: 3px;
+        padding: 2px 4px;
+        border: none;
+    """
+
+
+def loading_placeholder_style() -> str:
+    """Style for loading placeholder text."""
+    return f"""
+        color: {TEXT_TERTIARY};
+        font-family: {FONT_FAMILY};
+        font-size: {FONT_SIZE_XS};
+        font-style: italic;
+        border: none;
+    """
+
+
+def no_data_style() -> str:
+    """Style for N/A / no-data labels."""
+    return f"""
+        color: {TEXT_TERTIARY};
+        font-family: {FONT_MONO};
+        font-size: {FONT_SIZE_SM};
+        font-weight: {WEIGHT_MEDIUM};
+        border: none;
+    """
+
+
+def tab_button_active_style() -> str:
+    """Active tab button style for panel mode."""
+    return f"""
+        QPushButton {{
+            background-color: {ACCENT_PRIMARY};
+            color: #ffffff;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: {WEIGHT_BOLD};
+            padding: 4px 6px;
+        }}
+    """
+
+
+def tab_button_inactive_style() -> str:
+    """Inactive tab button style for panel mode."""
+    return f"""
+        QPushButton {{
+            background-color: transparent;
+            color: {TEXT_TERTIARY};
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            padding: 4px 6px;
+        }}
+        QPushButton:hover {{
+            background-color: {ACCENT_SUBTLE};
+            color: {ACCENT_PRIMARY};
+        }}
+    """
