@@ -4472,6 +4472,55 @@ def main():
             print("No benchmark session to export.")
         return 0
 
+    # ── Phase 56: Rollback Manager ───────────────────────────
+    if "--rollback-status" in sys.argv:
+        from app.core.rollback_manager import rollback_manager
+
+        print(rollback_manager.format_status())
+        return 0
+
+    if "--rollback-check" in sys.argv:
+        from app.core.rollback_manager import rollback_manager
+
+        incomplete = rollback_manager.detect_incomplete_sessions()
+        if incomplete:
+            print(rollback_manager.format_crash_recovery(incomplete))
+        else:
+            print("No incomplete optimization sessions found.")
+        return 0
+
+    if "--rollback-undo" in sys.argv:
+        from app.core.rollback_manager import rollback_manager
+
+        success, msg = rollback_manager.undo_last_change()
+        print(f"{'OK' if success else 'FAILED'}: {msg}")
+        return 0
+
+    if "--rollback-undo-session" in sys.argv:
+        from app.core.rollback_manager import rollback_manager
+
+        session_id = None
+        for i, arg in enumerate(sys.argv):
+            if arg == "--session" and i + 1 < len(sys.argv):
+                session_id = sys.argv[i + 1]
+
+        restore = rollback_manager.undo_session(session_id)
+        print(f"Restored: {restore.changes_succeeded}/{restore.changes_attempted} changes")
+        if restore.errors:
+            for e in restore.errors:
+                print(f"  Error: {e}")
+        return 0
+
+    if "--rollback-restore-all" in sys.argv:
+        from app.core.rollback_manager import rollback_manager
+
+        restore = rollback_manager.restore_all()
+        print(f"Restored: {restore.changes_succeeded}/{restore.changes_attempted} changes")
+        if restore.errors:
+            for e in restore.errors:
+                print(f"  Error: {e}")
+        return 0
+
     if "--final-validation" in sys.argv:
         from app.core.validation_engine import run_final_validation
 
