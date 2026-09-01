@@ -4610,6 +4610,57 @@ def main():
             print("All settings reset to defaults")
         return 0
 
+    # ── Phase 58: Notifications ─────────────────────────────
+    if "--notifications-status" in sys.argv:
+        from app.core.notifications import notification_manager
+        print(notification_manager.format_summary())
+        return 0
+
+    if "--notifications-active" in sys.argv:
+        from app.core.notifications import notification_manager
+        print(notification_manager.format_active())
+        return 0
+
+    if "--notifications-test" in sys.argv:
+        from app.core.notifications import (
+            notification_manager, NotificationLevel, NotificationCategory,
+        )
+
+        level = NotificationLevel.INFO
+        for i, arg in enumerate(sys.argv):
+            if arg == "--level" and i + 1 < len(sys.argv):
+                val = sys.argv[i + 1].upper()
+                try:
+                    level = NotificationLevel(val)
+                except ValueError:
+                    pass
+
+        msg = "This is a test notification from Heaven Society."
+        for i, arg in enumerate(sys.argv):
+            if arg == "--message" and i + 1 < len(sys.argv):
+                msg = sys.argv[i + 1]
+
+        notif = notification_manager.notify(
+            title="Test Notification",
+            message=msg,
+            level=level,
+            category=NotificationCategory.SYSTEM,
+            source="cli",
+            force=True,
+        )
+        if notif:
+            print(f"Sent: [{notif.level.value}] {notif.title}")
+        else:
+            print("Notification suppressed (disabled or cooldown)")
+        return 0
+
+    if "--notifications-clear" in sys.argv:
+        from app.core.notifications import notification_manager
+
+        count = notification_manager.dismiss_all()
+        print(f"Dismissed {count} notification(s)")
+        return 0
+
     if "--final-validation" in sys.argv:
         from app.core.validation_engine import run_final_validation
 
