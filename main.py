@@ -4278,6 +4278,65 @@ def main():
         print("\n" + "=" * 55)
         return 0
 
+    # ── Phase 53: Process Resource Intelligence ──────────────
+    if "--process-scan" in sys.argv:
+        from app.system.process_intelligence import process_intelligence
+
+        result = process_intelligence.scan()
+        print(process_intelligence.format_status())
+        return 0
+
+    if "--process-status" in sys.argv:
+        from app.system.process_intelligence import process_intelligence
+
+        scan = process_intelligence.scan()
+        print("=" * 55)
+        print("  PROCESS RESOURCE STATUS")
+        print("=" * 55)
+        print(f"\n  Processes:   {scan.total_processes}")
+        print(f"  Pressure:    {scan.resource_pressure.value}")
+        print(f"  BG CPU:      {scan.total_background_cpu:.1f}%")
+        print(f"  BG RAM:      {scan.total_background_memory_mb:.0f} MB")
+        print(f"  Duration:    {scan.duration_seconds:.2f}s")
+        if scan.classified_processes:
+            print(f"\n  Categories:")
+            for cat, count in sorted(
+                scan.classified_processes.items(), key=lambda x: x[1], reverse=True
+            ):
+                print(f"    {cat:<20} {count}")
+        print("\n" + "=" * 55)
+        return 0
+
+    if "--process-report" in sys.argv:
+        from app.system.process_intelligence import process_intelligence
+        import json
+
+        scan = process_intelligence.scan()
+        report = {
+            "total_processes": scan.total_processes,
+            "pressure": scan.resource_pressure.value,
+            "background_cpu": scan.total_background_cpu,
+            "background_memory_mb": scan.total_background_memory_mb,
+            "categories": scan.classified_processes,
+            "top_memory": [
+                {"name": s.name, "pid": s.pid, "memory_mb": round(s.memory_mb),
+                 "cpu": round(s.cpu_percent, 1), "category": s.category.value}
+                for s in scan.top_memory[:10]
+            ],
+            "top_cpu": [
+                {"name": s.name, "pid": s.pid, "cpu": round(s.cpu_percent, 1),
+                 "memory_mb": round(s.memory_mb), "category": s.category.value}
+                for s in scan.top_cpu[:10]
+            ],
+            "recommendations": [
+                {"name": r.name, "action": r.action.value, "title": r.title,
+                 "explanation": r.explanation}
+                for r in scan.recommendations[:10]
+            ],
+        }
+        print(json.dumps(report, indent=2))
+        return 0
+
     if "--final-validation" in sys.argv:
         from app.core.validation_engine import run_final_validation
 
