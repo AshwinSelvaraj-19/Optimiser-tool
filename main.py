@@ -4337,6 +4337,52 @@ def main():
         print(json.dumps(report, indent=2))
         return 0
 
+    # ── Phase 54: Optimization Profiles ──────────────────────
+    if "--profile-list" in sys.argv:
+        from app.core.optimization_profiles import profile_manager
+
+        profiles = profile_manager.list_profiles()
+        print("=" * 55)
+        print("  HEAVEN SOCIETY — OPTIMIZATION PROFILES")
+        print("=" * 55)
+        print(f"\n  {'ID':<18} {'TYPE':<10} {'OPTS':<5} {'ADMIN':<6} NAME")
+        print("  " + "-" * 50)
+        for p in profiles:
+            admin = "YES" if p["requires_admin"] else "no"
+            print(f"  {p['id']:<18} {p['type']:<10} {p['optimizations']:<5} {admin:<6} {p['name']}")
+        print("\n" + "=" * 55)
+        return 0
+
+    if "--profile-show" in sys.argv:
+        from app.core.optimization_profiles import profile_manager
+
+        profile_id = "gaming"
+        for i, arg in enumerate(sys.argv):
+            if arg == "--profile" and i + 1 < len(sys.argv):
+                profile_id = sys.argv[i + 1]
+
+        explanation = profile_manager.explain_profile(profile_id)
+        print("=" * 55)
+        print(explanation)
+        print("=" * 55)
+        return 0
+
+    if "--profile-export" in sys.argv:
+        from app.core.optimization_profiles import profile_manager
+        import json as _json
+
+        profile_id = "gaming"
+        for i, arg in enumerate(sys.argv):
+            if arg == "--profile" and i + 1 < len(sys.argv):
+                profile_id = sys.argv[i + 1]
+
+        data = profile_manager.export_profile(profile_id)
+        if data:
+            print(_json.dumps(data, indent=2))
+        else:
+            print(f"Profile '{profile_id}' not found.")
+        return 0
+
     if "--final-validation" in sys.argv:
         from app.core.validation_engine import run_final_validation
 
