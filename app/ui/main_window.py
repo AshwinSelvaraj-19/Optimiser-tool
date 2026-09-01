@@ -87,47 +87,47 @@ class TopTabButton(QPushButton):
 class MainWindow(QMainWindow):
     """Heaven Society — compact performance utility."""
 
+    # Lazy page constructors — imported only on first visit
+    _PAGE_FACTORIES = {
+        "home": ("app.ui.home_page", "HomePage"),
+        "optimize": ("app.ui.optimizer_page", "OptimizerPage"),
+        "monitor": ("app.ui.monitor_page", "MonitorPage"),
+        "cleanup": ("app.ui.cleanup_page", "CleanupPage"),
+        "tools": ("app.ui.tools_page", "ToolsPage"),
+        "settings": ("app.ui.settings_page", "SettingsPage"),
+    }
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Heaven Society")
         self.setMinimumSize(850, 560)
         self.resize(920, 600)
-        self._pages = {}
+        self._pages = {}         # key -> page instance (lazily created)
+        self._page_stack_map = {} # key -> index in QStackedWidget
         self._nav_buttons = []
+        self._loading_label = None  # placeholder shown while page loads
 
         self._setup_ui()
         self.setStyleSheet(global_stylesheet())
 
-        self._create_pages()
+        # Create only the home page immediately (fast)
+        self._ensure_page("home")
         self._navigate_to("home")
 
-    def _create_pages(self):
-        """Create all pages and add to stack."""
-        from app.ui.home_page import HomePage
-        from app.ui.optimizer_page import OptimizerPage
-        from app.ui.monitor_page import MonitorPage
-        from app.ui.cleanup_page import CleanupPage
-        from app.ui.tools_page import ToolsPage
-        from app.ui.settings_page import SettingsPage
-
-        page_map = {
-            "home": HomePage,
-            "optimize": OptimizerPage,
-            "monitor": MonitorPage,
-            "cleanup": CleanupPage,
-            "tools": ToolsPage,
-            "settings": SettingsPage,
-        }
-
-        for key, cls in page_map.items():
-            page = cls()
-            self._pages[key] = page
-            self._page_stack.addWidget(page)
-
+    def _ensure_page(self, key: str):
+        """Lazily construct a page on first visit."""
+        if key in self._pages:
+            return
+        mod_path, cls_name = self._PAGE_FACTORIES[key]
+        mod = __import__(mod_path, fromlist=[cls_name])
+        cls = getattr(mod, cls_name)
+        page = cls()
+        self._pages[key] = page
+        idx = self._page_stack.addWidget(page)
+        self._page_stack_map[key] = idx
         # Connect home page signals
-        home = self._pages["home"]
-        if hasattr(home, 'navigate_to'):
-            home.navigate_to.connect(self._navigate_to)
+        if key == "home" and hasattr(page, "navigate_to"):
+            page.navigate_to.connect(self._navigate_to)
 
     def _setup_ui(self):
         central = QWidget()
@@ -193,10 +193,10 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self._page_stack)
 
     def _navigate_to(self, page_key: str):
-        if page_key not in self._pages:
-            return
         for btn in self._nav_buttons:
             btn.setActive(btn.page_key == page_key)
+        # Lazily construct page on first visit
+        self._ensure_page(page_key)
         self._page_stack.setCurrentWidget(self._pages[page_key])
         page = self._pages[page_key]
         if hasattr(page, 'refresh'):
@@ -218,6 +218,24 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         try:
+            # Stop all page timers and workers
+            for page in self._pages.values():
+                for attr in dir(page):
+                    obj = getattr(page, attr, None)
+                    try:
+                        from PySide6.QtCore import QTimer
+                        if isinstance(obj, QTimer) and obj.isActive():
+                            obj.stop()
+                    except Exception:
+                        pass
+                    # Stop worker threads
+                    try:
+                        if hasattr(obj, "isRunning") and obj.isRunning():
+                            obj.quit()
+                            obj.wait(1000)
+                    except Exception:
+                        pass
+            # Stop telemetry
             from app.core.telemetry import telemetry_engine
             telemetry_engine.stop()
             from app.system.gpu import gpu_monitor

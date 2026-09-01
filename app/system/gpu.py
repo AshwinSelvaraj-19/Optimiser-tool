@@ -16,21 +16,34 @@ logger = get_logger("system.gpu")
 # Suppress FutureWarning about pynvml deprecation — it still works fine
 import warnings
 
+pynvml = None
+NVML_AVAILABLE = False
+_nviml_initialized = False
+
 try:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         warnings.simplefilter("ignore", FutureWarning)
-        try:
-            import pynvml
-
-            pynvml.nvmlInit()
-            NVML_AVAILABLE = True
-        except Exception:
-            NVML_AVAILABLE = False
-            pynvml = None
+        import pynvml as _pynvml
+        pynvml = _pynvml
+        # NVML is imported but NOT initialized here — defer to first use
 except Exception:
-    NVML_AVAILABLE = False
     pynvml = None
+
+
+def _ensure_nvml():
+    """Lazily initialize NVML on first actual use."""
+    global NVML_AVAILABLE, _nviml_initialized
+    if _nviml_initialized:
+        return
+    _nviml_initialized = True
+    if pynvml is None:
+        return
+    try:
+        pynvml.nvmlInit()
+        NVML_AVAILABLE = True
+    except Exception:
+        NVML_AVAILABLE = False
 
 
 @dataclass
@@ -64,6 +77,7 @@ class GPUMonitor:
 
     def detect(self) -> list:
         """Detect all GPUs in the system."""
+        _ensure_nvml()
         gpus = []
         nvml_names = set()
 
@@ -264,6 +278,7 @@ class GPUMonitor:
 
     def update_nvidia(self, gpu_info: GPUInfo) -> GPUInfo:
         """Update GPU info with latest NVML readings."""
+        _ensure_nvml()
         if not NVML_AVAILABLE:
             return gpu_info
 
