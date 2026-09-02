@@ -25,6 +25,9 @@ class MonitorWorkerResult:
     # thermal
     thermal_diag: Optional[Any] = None
 
+    # bottleneck analysis
+    bottleneck_analysis: Optional[Any] = None
+
 
 # ── worker ─────────────────────────────────────────────────────────
 
@@ -57,6 +60,15 @@ class _MonitorWorker(QObject):
         try:
             from app.system.thermal_monitor import thermal_diagnostics
             r.thermal_diag = thermal_diagnostics.diagnose()
+        except Exception:
+            pass
+
+        # Bottleneck analysis (~11ms first call, but includes module imports)
+        try:
+            from app.core.telemetry import telemetry_engine
+            from app.core.analyzer import bottleneck_analyzer
+            frame = telemetry_engine.current
+            r.bottleneck_analysis = bottleneck_analyzer.analyze(frame)
         except Exception:
             pass
 

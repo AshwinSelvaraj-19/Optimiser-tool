@@ -49,7 +49,7 @@ class MetricBlock(QFrame):
             }}
         """)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(2)
 
         self.title_label = QLabel(title)
@@ -91,15 +91,15 @@ class TargetPanel(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFrameStyle(QFrame.NoFrame)
-        self.setMinimumHeight(80)
+        self.setMinimumHeight(60)
         self.setStyleSheet(f"""
             QFrame {{
                 {card_style()}
             }}
         """)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 10, 14, 10)
-        layout.setSpacing(16)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(12)
 
         # Status dot + text
         left = QVBoxLayout()
@@ -502,8 +502,8 @@ class HomePage(QWidget):
         scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
         scroll_content = QWidget()
         layout = QVBoxLayout(scroll_content)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(6)
         scroll.setWidget(scroll_content)
         outer.addWidget(scroll)
 
@@ -565,8 +565,8 @@ class HomePage(QWidget):
             }}
         """)
         status_layout = QHBoxLayout(status_frame)
-        status_layout.setContentsMargins(14, 8, 14, 8)
-        status_layout.setSpacing(8)
+        status_layout.setContentsMargins(12, 6, 12, 6)
+        status_layout.setSpacing(6)
 
         perf_title = QLabel("STATUS")
         perf_title.setStyleSheet(f"""
@@ -623,8 +623,8 @@ class HomePage(QWidget):
         self.ga_frame = QFrame()
         self.ga_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         ga_layout = QHBoxLayout(self.ga_frame)
-        ga_layout.setContentsMargins(12, 6, 12, 6)
-        ga_layout.setSpacing(16)
+        ga_layout.setContentsMargins(10, 4, 10, 4)
+        ga_layout.setSpacing(12)
 
         self.ga_bottleneck = QLabel("BOTTLENECK: --")
         self.ga_bottleneck.setStyleSheet(f"""
@@ -664,8 +664,8 @@ class HomePage(QWidget):
         self.rec_frame = QFrame()
         self.rec_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         self.rec_layout = QVBoxLayout(self.rec_frame)
-        self.rec_layout.setContentsMargins(14, 10, 14, 10)
-        self.rec_layout.setSpacing(4)
+        self.rec_layout.setContentsMargins(12, 8, 12, 8)
+        self.rec_layout.setSpacing(3)
 
         self.rec_health_label = QLabel("SYSTEM HEALTHY")
         self.rec_health_label.setStyleSheet(f"""
@@ -694,8 +694,8 @@ class HomePage(QWidget):
         self.storage_frame = QFrame()
         self.storage_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         storage_layout = QHBoxLayout(self.storage_frame)
-        storage_layout.setContentsMargins(14, 8, 14, 8)
-        storage_layout.setSpacing(16)
+        storage_layout.setContentsMargins(12, 6, 12, 6)
+        storage_layout.setSpacing(12)
 
         self.storage_status_label = QLabel("--")
         self.storage_status_label.setStyleSheet(f"""
@@ -728,14 +728,14 @@ class HomePage(QWidget):
         actions_layout.setSpacing(8)
 
         self.optimize_btn = QPushButton("OPTIMIZE")
-        self.optimize_btn.setFixedHeight(28)
+        self.optimize_btn.setFixedHeight(24)
         self.optimize_btn.setCursor(Qt.PointingHandCursor)
         self.optimize_btn.setStyleSheet(button_primary_style())
         self.optimize_btn.clicked.connect(lambda: self.navigate_to.emit("optimize"))
         actions_layout.addWidget(self.optimize_btn)
 
         self.benchmark_btn = QPushButton("BENCHMARK")
-        self.benchmark_btn.setFixedHeight(28)
+        self.benchmark_btn.setFixedHeight(24)
         self.benchmark_btn.setCursor(Qt.PointingHandCursor)
         self.benchmark_btn.setStyleSheet(button_secondary_style())
         self.benchmark_btn.clicked.connect(lambda: self.navigate_to.emit("tools"))
@@ -743,7 +743,7 @@ class HomePage(QWidget):
         self._hidden_widgets.append(self.benchmark_btn)
 
         self.diagnostic_btn = QPushButton("DIAGNOSTIC")
-        self.diagnostic_btn.setFixedHeight(28)
+        self.diagnostic_btn.setFixedHeight(24)
         self.diagnostic_btn.setCursor(Qt.PointingHandCursor)
         self.diagnostic_btn.setStyleSheet(button_secondary_style())
         self.diagnostic_btn.clicked.connect(lambda: self.navigate_to.emit("tools"))

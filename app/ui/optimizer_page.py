@@ -24,10 +24,18 @@ from app.ui.theme import (
     no_data_style, status_indicator_style, metric_value_sm_style,
 )
 from app.core.profiles import get_all_profiles
-from app.core.optimizer import optimizer
-from app.performance.benchmark_models import BenchmarkResult, BenchmarkComparison
 from app.utils.logger import get_logger
 from app.ui.optimizer_worker import OptimizerWorkerThread, OptimizerWorkerResult
+
+# Deferred import — avoids 1.4s module-level load of app.core.optimizer
+_optimizer = None
+
+def _get_optimizer():
+    global _optimizer
+    if _optimizer is None:
+        from app.core.optimizer import optimizer
+        _optimizer = optimizer
+    return _optimizer
 
 logger = get_logger("ui.optimizer_page")
 
@@ -38,7 +46,7 @@ class OptRow(QFrame):
     def __init__(self, name: str, value: str = "", parent=None):
         super().__init__(parent)
         self.setFrameStyle(QFrame.NoFrame)
-        self.setFixedHeight(32)
+        self.setFixedHeight(28)
         self.setStyleSheet(opt_row_style())
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 2, 10, 2)
@@ -74,8 +82,9 @@ class ApplyThread(QThread):
         self.profile_id = profile_id
 
     def run(self):
-        optimizer.on_progress(lambda p, m: self.progress.emit(p, m))
-        report = optimizer.apply_profile(self.profile_id)
+        opt = _get_optimizer()
+        opt.on_progress(lambda p, m: self.progress.emit(p, m))
+        report = opt.apply_profile(self.profile_id)
         self.complete.emit(report)
 
 
@@ -146,8 +155,8 @@ class OptimizerPage(QWidget):
         scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
         scroll_content = QWidget()
         layout = QVBoxLayout(scroll_content)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(4)
         scroll.setWidget(scroll_content)
         outer.addWidget(scroll)
 
@@ -189,8 +198,8 @@ class OptimizerPage(QWidget):
         status_frame = QFrame()
         status_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         status_layout = QVBoxLayout(status_frame)
-        status_layout.setContentsMargins(12, 8, 12, 8)
-        status_layout.setSpacing(4)
+        status_layout.setContentsMargins(10, 6, 10, 6)
+        status_layout.setSpacing(3)
 
         # Target info
         self.target_label = QLabel("TARGET")
@@ -250,7 +259,7 @@ class OptimizerPage(QWidget):
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        self.progress_bar.setFixedHeight(3)
+        self.progress_bar.setFixedHeight(2)
         self.progress_bar.setTextVisible(False)
         layout.addWidget(self.progress_bar)
 
@@ -266,7 +275,7 @@ class OptimizerPage(QWidget):
         # Log
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(80)
+        self.log_text.setMaximumHeight(50)
         self.log_text.setStyleSheet(f"""
             QTextEdit {{
                 background-color: {BG_PANEL};
@@ -284,8 +293,8 @@ class OptimizerPage(QWidget):
         self.win_frame = QFrame()
         self.win_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         win_layout = QVBoxLayout(self.win_frame)
-        win_layout.setContentsMargins(12, 8, 12, 8)
-        win_layout.setSpacing(3)
+        win_layout.setContentsMargins(10, 6, 10, 6)
+        win_layout.setSpacing(2)
 
         win_header = QHBoxLayout()
         win_title = QLabel("WINDOWS GAMING")
@@ -321,8 +330,8 @@ class OptimizerPage(QWidget):
         bench_frame = QFrame()
         bench_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         bench_layout = QVBoxLayout(bench_frame)
-        bench_layout.setContentsMargins(12, 8, 12, 8)
-        bench_layout.setSpacing(4)
+        bench_layout.setContentsMargins(10, 6, 10, 6)
+        bench_layout.setSpacing(3)
 
         bench_header = QHBoxLayout()
         bench_title = QLabel("BENCHMARK")
@@ -396,8 +405,8 @@ class OptimizerPage(QWidget):
         self.resource_frame = QFrame()
         self.resource_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         res_layout = QVBoxLayout(self.resource_frame)
-        res_layout.setContentsMargins(12, 8, 12, 8)
-        res_layout.setSpacing(3)
+        res_layout.setContentsMargins(10, 6, 10, 6)
+        res_layout.setSpacing(2)
 
         res_header = QHBoxLayout()
         res_title = QLabel("RESOURCES")
@@ -461,8 +470,8 @@ class OptimizerPage(QWidget):
         self.bg_frame = QFrame()
         self.bg_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         bg_layout = QVBoxLayout(self.bg_frame)
-        bg_layout.setContentsMargins(12, 8, 12, 8)
-        bg_layout.setSpacing(3)
+        bg_layout.setContentsMargins(10, 6, 10, 6)
+        bg_layout.setSpacing(2)
 
         bg_header = QHBoxLayout()
         bg_title = QLabel("BACKGROUND LOAD")
@@ -521,8 +530,8 @@ class OptimizerPage(QWidget):
         self.mem_frame = QFrame()
         self.mem_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         mem_layout = QVBoxLayout(self.mem_frame)
-        mem_layout.setContentsMargins(12, 8, 12, 8)
-        mem_layout.setSpacing(3)
+        mem_layout.setContentsMargins(10, 6, 10, 6)
+        mem_layout.setSpacing(2)
 
         mem_header = QHBoxLayout()
         mem_title = QLabel("MEMORY")
@@ -585,8 +594,8 @@ class OptimizerPage(QWidget):
         self.startup_frame = QFrame()
         self.startup_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         startup_layout = QVBoxLayout(self.startup_frame)
-        startup_layout.setContentsMargins(12, 8, 12, 8)
-        startup_layout.setSpacing(3)
+        startup_layout.setContentsMargins(10, 6, 10, 6)
+        startup_layout.setSpacing(2)
 
         startup_header = QHBoxLayout()
         startup_title = QLabel("STARTUP")
@@ -645,8 +654,8 @@ class OptimizerPage(QWidget):
         self.telemetry_frame = QFrame()
         self.telemetry_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         telem_layout = QVBoxLayout(self.telemetry_frame)
-        telem_layout.setContentsMargins(12, 8, 12, 8)
-        telem_layout.setSpacing(3)
+        telem_layout.setContentsMargins(10, 6, 10, 6)
+        telem_layout.setSpacing(2)
 
         telem_header = QHBoxLayout()
         telem_title = QLabel("TELEMETRY")
@@ -707,8 +716,8 @@ class OptimizerPage(QWidget):
         self.rec_frame = QFrame()
         self.rec_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         rec_layout = QVBoxLayout(self.rec_frame)
-        rec_layout.setContentsMargins(12, 8, 12, 8)
-        rec_layout.setSpacing(3)
+        rec_layout.setContentsMargins(10, 6, 10, 6)
+        rec_layout.setSpacing(2)
 
         rec_header = QHBoxLayout()
         rec_title = QLabel("RECOMMENDATIONS")
@@ -752,8 +761,8 @@ class OptimizerPage(QWidget):
         self.adaptive_frame = QFrame()
         self.adaptive_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         adapt_layout = QVBoxLayout(self.adaptive_frame)
-        adapt_layout.setContentsMargins(12, 8, 12, 8)
-        adapt_layout.setSpacing(3)
+        adapt_layout.setContentsMargins(10, 6, 10, 6)
+        adapt_layout.setSpacing(2)
 
         adapt_header = QHBoxLayout()
         adapt_title = QLabel("ADAPTIVE OPTIMIZATION")
@@ -789,8 +798,8 @@ class OptimizerPage(QWidget):
         self.opt_session_frame = QFrame()
         self.opt_session_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         sess_layout = QVBoxLayout(self.opt_session_frame)
-        sess_layout.setContentsMargins(12, 8, 12, 8)
-        sess_layout.setSpacing(3)
+        sess_layout.setContentsMargins(10, 6, 10, 6)
+        sess_layout.setSpacing(2)
 
         sess_header = QHBoxLayout()
         sess_title = QLabel("OPTIMIZATION SESSION")
@@ -819,8 +828,8 @@ class OptimizerPage(QWidget):
         self.engine_frame = QFrame()
         self.engine_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         engine_layout = QVBoxLayout(self.engine_frame)
-        engine_layout.setContentsMargins(12, 8, 12, 8)
-        engine_layout.setSpacing(3)
+        engine_layout.setContentsMargins(10, 6, 10, 6)
+        engine_layout.setSpacing(2)
 
         engine_header = QHBoxLayout()
         engine_title = QLabel("ENGINE STATUS")
@@ -849,8 +858,8 @@ class OptimizerPage(QWidget):
         self.input_frame = QFrame()
         self.input_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         input_layout = QVBoxLayout(self.input_frame)
-        input_layout.setContentsMargins(12, 8, 12, 8)
-        input_layout.setSpacing(3)
+        input_layout.setContentsMargins(10, 6, 10, 6)
+        input_layout.setSpacing(2)
 
         input_header = QHBoxLayout()
         input_title = QLabel("INPUT & GAMEPLAY")
@@ -894,8 +903,8 @@ class OptimizerPage(QWidget):
         self.resp_frame = QFrame()
         self.resp_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         resp_layout = QVBoxLayout(self.resp_frame)
-        resp_layout.setContentsMargins(12, 8, 12, 8)
-        resp_layout.setSpacing(3)
+        resp_layout.setContentsMargins(10, 6, 10, 6)
+        resp_layout.setSpacing(2)
 
         resp_header = QHBoxLayout()
         resp_title = QLabel("RESPONSIVENESS")
@@ -931,8 +940,8 @@ class OptimizerPage(QWidget):
         self.gaming_session_frame = QFrame()
         self.gaming_session_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         gs_layout = QVBoxLayout(self.gaming_session_frame)
-        gs_layout.setContentsMargins(12, 8, 12, 8)
-        gs_layout.setSpacing(3)
+        gs_layout.setContentsMargins(10, 6, 10, 6)
+        gs_layout.setSpacing(2)
 
         gs_header = QHBoxLayout()
         gs_title = QLabel("GAMING SESSION")
@@ -1623,7 +1632,7 @@ class OptimizerPage(QWidget):
     def _restore(self):
         self.restore_btn.setEnabled(False)
         self._log("Restoring...")
-        result = optimizer.rollback_last()
+        result = _get_optimizer().rollback_last()
         self._log(f"Restore: {result.message}")
         if result.restored_entries:
             self._log(f"  Restored: {', '.join(result.restored_entries)}")

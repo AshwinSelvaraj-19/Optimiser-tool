@@ -83,8 +83,8 @@ class ToolsPage(QWidget):
         scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
         scroll_content = QWidget()
         layout = QVBoxLayout(scroll_content)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(4)
         scroll.setWidget(scroll_content)
         outer.addWidget(scroll)
 
@@ -107,8 +107,8 @@ class ToolsPage(QWidget):
             }}
         """)
         bench_layout = QVBoxLayout(bench_frame)
-        bench_layout.setContentsMargins(12, 10, 12, 10)
-        bench_layout.setSpacing(6)
+        bench_layout.setContentsMargins(10, 8, 10, 8)
+        bench_layout.setSpacing(4)
 
         bench_header = QHBoxLayout()
         bench_title = QLabel("BENCHMARK")
@@ -161,8 +161,8 @@ class ToolsPage(QWidget):
             }}
         """)
         diag_layout = QVBoxLayout(diag_frame)
-        diag_layout.setContentsMargins(12, 10, 12, 10)
-        diag_layout.setSpacing(6)
+        diag_layout.setContentsMargins(10, 8, 10, 8)
+        diag_layout.setSpacing(4)
 
         diag_header = QHBoxLayout()
         diag_title = QLabel("DIAGNOSTIC")

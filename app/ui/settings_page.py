@@ -31,6 +31,8 @@ logger = get_logger("ui.settings_page")
 
 class SettingsPage(QWidget):
     """Settings page — minimal, only useful settings."""
+    _pm_cache = None      # cached PresentMon path
+    _pm_cache_ts = 0.0    # timestamp of cache
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -48,8 +50,8 @@ class SettingsPage(QWidget):
         scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
         scroll_content = QWidget()
         layout = QVBoxLayout(scroll_content)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(4)
         scroll.setWidget(scroll_content)
         outer.addWidget(scroll)
 
@@ -65,8 +67,8 @@ class SettingsPage(QWidget):
             }}
         """)
         snap_layout = QVBoxLayout(snap_frame)
-        snap_layout.setContentsMargins(12, 10, 12, 10)
-        snap_layout.setSpacing(6)
+        snap_layout.setContentsMargins(10, 8, 10, 8)
+        snap_layout.setSpacing(4)
 
         snap_header = QHBoxLayout()
         snap_title = QLabel("SNAPSHOTS")
@@ -125,8 +127,8 @@ class SettingsPage(QWidget):
             }}
         """)
         pm_layout = QVBoxLayout(pm_frame)
-        pm_layout.setContentsMargins(12, 10, 12, 10)
-        pm_layout.setSpacing(4)
+        pm_layout.setContentsMargins(10, 8, 10, 8)
+        pm_layout.setSpacing(3)
 
         pm_title = QLabel("PRESENTMON")
         pm_title.setStyleSheet(card_title_style())
@@ -151,8 +153,8 @@ class SettingsPage(QWidget):
             }}
         """)
         about_layout = QVBoxLayout(about_frame)
-        about_layout.setContentsMargins(12, 10, 12, 10)
-        about_layout.setSpacing(4)
+        about_layout.setContentsMargins(10, 8, 10, 8)
+        about_layout.setSpacing(3)
 
         about_title = QLabel("HEAVEN SOCIETY")
         about_title.setStyleSheet(section_header_style())
@@ -191,10 +193,22 @@ class SettingsPage(QWidget):
             logger.debug(f"Snapshot load: {e}")
 
     def _load_pm_info(self):
+        import time as _time
+        # Cache PresentMon path for 60 seconds to avoid repeated filesystem scans
+        now = _time.time()
+        if SettingsPage._pm_cache is not None and (now - SettingsPage._pm_cache_ts) < 60:
+            pm_path = SettingsPage._pm_cache
+        else:
+            try:
+                from app.performance.presentmon_provider import find_presentmon
+                pm_path = find_presentmon()
+            except Exception:
+                pm_path = None
+            SettingsPage._pm_cache = pm_path
+            SettingsPage._pm_cache_ts = now
         try:
-            from app.performance.presentmon_provider import find_presentmon, get_presentmon_version
-            pm_path = find_presentmon()
             if pm_path:
+                from app.performance.presentmon_provider import get_presentmon_version
                 ver = get_presentmon_version(pm_path)
                 self.pm_info.setText(
                     f"Status: {STATUS_OK.replace('<span style=\"color:', '').replace('\">', '')} READY\n"

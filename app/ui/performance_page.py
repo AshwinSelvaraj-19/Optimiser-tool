@@ -71,6 +71,8 @@ class PerformancePage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._cards = {}
+        self._cached_pm_path = None  # Cached PresentMon path (filesystem scan once)
+        self._cached_bottleneck = None  # Cached bottleneck from worker
         self._setup_ui()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_telemetry)
@@ -187,10 +189,12 @@ class PerformancePage(QWidget):
             else:
                 self._cards["CPU CLOCK"].value_label.setText("N/A")
 
-            # FPS — check PresentMon provider status
-            from app.performance.presentmon_provider import find_presentmon
+            # FPS — check PresentMon provider status (cached path)
             from app.performance.fps_provider import fps_registry
-            pm_path = find_presentmon()
+            if self._cached_pm_path is None:
+                from app.performance.presentmon_provider import find_presentmon
+                self._cached_pm_path = find_presentmon()
+            pm_path = self._cached_pm_path
             fps_status = fps_registry.get_status()
 
             if pm_path and fps_status.get("available"):
@@ -208,15 +212,35 @@ class PerformancePage(QWidget):
                     self._cards[key].value_label.setText("N/A")
                     self._cards[key].value_label.setStyleSheet("color: #5a6070; font-size: 11px; font-weight: 500; border: none;")
 
-            # Bottleneck (use telemetry history for windowed analysis)
-            self._update_bottleneck(frame)
+            # Bottleneck — use cached result (avoid ~11ms on GUI thread every 1s)
+            if self._cached_bottleneck is None:
+                self._update_bottleneck(frame)
+            else:
+                self._apply_cached_bottleneck()
 
         except Exception as e:
             logger.debug(f"Performance update: {e}")
 
+    def _apply_cached_bottleneck(self):
+        """Re-apply cached bottleneck result without re-analyzing."""
+        analysis = self._cached_bottleneck
+        if analysis and analysis.primary_bottleneck:
+            bn = analysis.primary_bottleneck
+            self.bottleneck_name.setText(bn.name.upper())
+            if bn.severity in ("HIGH", "CRITICAL"):
+                self.bottleneck_name.setStyleSheet("color: #ff6b6b; font-size: 14px; font-weight: 600; border: none;")
+            elif bn.severity == "MEDIUM":
+                self.bottleneck_name.setStyleSheet("color: #ffa940; font-size: 14px; font-weight: 600; border: none;")
+            else:
+                self.bottleneck_name.setStyleSheet("color: #40c057; font-size: 14px; font-weight: 600; border: none;")
+            self.bottleneck_confidence.setText(f"Confidence: {bn.confidence * 100:.0f}%")
+            self.bottleneck_reason.setText(bn.description)
+            self.bottleneck_actions.setText(f"\u2713 {bn.recommendation}")
+
     def _update_bottleneck(self, frame):
         from app.core.analyzer import bottleneck_analyzer
         analysis = bottleneck_analyzer.analyze(frame)
+        self._cached_bottleneck = analysis
 
         if analysis.primary_bottleneck:
             bn = analysis.primary_bottleneck

@@ -58,9 +58,9 @@ NORMAL_MAX_H = 1080
 
 # ── Common constants ──────────────────────────────────────────────
 
-HEADER_H = 36
+HEADER_H = 32
 SIDEBAR_W = 50
-TAB_BAR_H = 36
+TAB_BAR_H = 32
 
 # ── Navigation items ──────────────────────────────────────────────
 
@@ -143,9 +143,9 @@ class TabButton(QPushButton):
                     color: #ffffff;
                     border: none;
                     border-radius: 4px;
-                    font-size: 14px;
+                    font-size: 13px;
                     font-weight: {WEIGHT_BOLD};
-                    padding: 4px 6px;
+                    padding: 3px 5px;
                 }}
             """)
         else:
@@ -155,8 +155,8 @@ class TabButton(QPushButton):
                     color: {TEXT_TERTIARY};
                     border: none;
                     border-radius: 4px;
-                    font-size: 14px;
-                    padding: 4px 6px;
+                    font-size: 13px;
+                    padding: 3px 5px;
                 }}
                 QPushButton:hover {{
                     background-color: {ACCENT_SUBTLE};
@@ -218,9 +218,36 @@ class MainWindow(QMainWindow):
         # Restore geometry with off-screen recovery
         self._restore_geometry()
 
+        # If no saved geometry, use mode-appropriate default size
+        key = "panel_geometry" if self._panel_mode else "normal_geometry"
+        if not self._settings.contains(key):
+            if self._panel_mode:
+                self.resize(PANEL_W, PANEL_H)
+            else:
+                self.resize(NORMAL_W, NORMAL_H)
+
         # Create home page
         self._ensure_page("home")
         self._navigate_to("home")
+
+        # Preload heavy page imports in a background thread so first
+        # navigation is instant.  The thread only imports modules — it
+        # never touches Qt widgets.
+        import threading as _threading
+        def _bg_preload():
+            import importlib
+            for mod_path in (
+                "app.ui.optimizer_page",
+                "app.ui.monitor_page",
+                "app.ui.cleanup_page",
+                "app.ui.tools_page",
+                "app.ui.settings_page",
+            ):
+                try:
+                    importlib.import_module(mod_path)
+                except Exception:
+                    pass
+        _threading.Thread(target=_bg_preload, daemon=True, name="page_preload").start()
 
     # ── Window flags ──────────────────────────────────────────
 
@@ -380,8 +407,8 @@ class MainWindow(QMainWindow):
             }}
         """)
         tab_layout = QHBoxLayout(tab_frame)
-        tab_layout.setContentsMargins(6, 4, 6, 4)
-        tab_layout.setSpacing(2)
+        tab_layout.setContentsMargins(4, 3, 4, 3)
+        tab_layout.setSpacing(1)
 
         for icon, key, tooltip in NAV_ITEMS:
             btn = TabButton(icon, key, tooltip)
@@ -390,12 +417,6 @@ class MainWindow(QMainWindow):
             self._tab_buttons.append(btn)
 
         tab_layout.addStretch()
-
-        # Settings gear
-        settings_btn = TabButton("⚙", "settings", "Settings")
-        settings_btn.clicked.connect(lambda: self._navigate_to("settings"))
-        tab_layout.addWidget(settings_btn)
-        self._tab_buttons.append(settings_btn)
 
         v_layout.addWidget(tab_frame)
         self._tab_bar_widget = tab_frame
@@ -533,6 +554,14 @@ class MainWindow(QMainWindow):
 
         # Resize constraints
         self._apply_size_constraints()
+
+        # Set default size if no saved geometry exists
+        key = "panel_geometry" if self._panel_mode else "normal_geometry"
+        if not self._settings.contains(key):
+            if self._panel_mode:
+                self.resize(PANEL_W, PANEL_H)
+            else:
+                self.resize(NORMAL_W, NORMAL_H)
 
         # Rebuild UI
         self._nav_buttons = []

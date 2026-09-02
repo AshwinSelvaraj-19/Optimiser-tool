@@ -19,7 +19,7 @@ from app.ui.theme import (
     FONT_SIZE_SM, FONT_SIZE_XS,
     WEIGHT_BOLD, WEIGHT_SEMIBOLD, WEIGHT_MEDIUM,
     RADIUS_MD, card_style, button_primary_style, button_secondary_style,
-    section_header_style,
+    section_header_style, card_title_style,
 )
 from app.utils.logger import get_logger
 
@@ -161,6 +161,58 @@ class CleanupItemRow(QFrame):
         layout.addWidget(self.status_label)
 
 
+class DiskDiagThread(QThread):
+    """Background disk diagnostics thread."""
+    complete = Signal(object)
+
+    def run(self):
+        try:
+            from app.system.disk_analyzer import disk_analyzer
+            diag = disk_analyzer.diagnose()
+            self.complete.emit(diag)
+        except Exception:
+            self.complete.emit(None)
+
+
+class MaintenanceCheckThread(QThread):
+    """Background thread for lightweight maintenance evaluation."""
+    complete = Signal(object)
+
+    def run(self):
+        try:
+            from app.cleanup.maintenance_intelligence import maintenance_intelligence
+            from app.system.disk_analyzer import disk_analyzer
+            from app.cleanup.cleanup_scanner import CleanupScanner
+
+            # Lightweight disk info
+            diag = disk_analyzer.diagnose()
+            free_gb = 0.0
+            total_gb = 0.0
+            pressure = "NORMAL"
+            if diag.system_drive:
+                free_gb = diag.system_drive.free_bytes / (1024 ** 3)
+                total_gb = diag.system_drive.total_bytes / (1024 ** 3)
+                pressure = diag.pressure_level.value if diag.pressure_level else "NORMAL"
+
+            # Quick scan for reclaimable size (reuse existing scanner)
+            scanner = CleanupScanner()
+            items = scanner.scan()
+            reclaimable = sum(i.removable_size for i in items if i.can_delete)
+            categories = len(set(i.category for i in items if i.can_delete))
+
+            rec = maintenance_intelligence.evaluate(
+                reclaimable_bytes=reclaimable,
+                disk_free_gb=free_gb,
+                disk_total_gb=total_gb,
+                cleanup_categories=categories,
+                total_cleanup_items=len(items),
+                storage_pressure=pressure,
+            )
+            self.complete.emit(rec)
+        except Exception as e:
+            self.complete.emit(None)
+
+
 class CleanupPage(QWidget):
     """Cleanup page — compact Heaven Society cleanup utility."""
 
@@ -168,6 +220,8 @@ class CleanupPage(QWidget):
         super().__init__(parent)
         self._items = []
         self._item_rows = []
+        self._disk_diag_thread = None
+        self._maintenance_thread = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -182,8 +236,8 @@ class CleanupPage(QWidget):
         scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
         scroll_content = QWidget()
         layout = QVBoxLayout(scroll_content)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(4)
         scroll.setWidget(scroll_content)
         outer.addWidget(scroll)
 
@@ -218,12 +272,57 @@ class CleanupPage(QWidget):
 
         layout.addLayout(header)
 
+        # ── Maintenance Intelligence Card ──────────────────
+        self.maint_frame = QFrame()
+        self.maint_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
+        maint_layout = QVBoxLayout(self.maint_frame)
+        maint_layout.setContentsMargins(10, 6, 10, 6)
+        maint_layout.setSpacing(3)
+
+        maint_header = QHBoxLayout()
+        maint_title = QLabel("MAINTENANCE")
+        maint_title.setStyleSheet(card_title_style())
+        maint_header.addWidget(maint_title)
+        maint_header.addStretch()
+        self.maint_status_label = QLabel("")
+        self.maint_status_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+            font-weight: {WEIGHT_BOLD}; border: none;
+        """)
+        maint_header.addWidget(self.maint_status_label)
+        maint_layout.addLayout(maint_header)
+
+        self.maint_main_label = QLabel("Checking...")
+        self.maint_main_label.setStyleSheet(f"""
+            color: {TEXT_SECONDARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM};
+            border: none;
+        """)
+        maint_layout.addWidget(self.maint_main_label)
+
+        self.maint_detail_label = QLabel("")
+        self.maint_detail_label.setWordWrap(True)
+        self.maint_detail_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY}; font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS};
+            border: none;
+        """)
+        maint_layout.addWidget(self.maint_detail_label)
+
+        self.maint_review_btn = QPushButton("REVIEW")
+        self.maint_review_btn.setFixedHeight(24)
+        self.maint_review_btn.setCursor(Qt.PointingHandCursor)
+        self.maint_review_btn.setStyleSheet(button_secondary_style())
+        self.maint_review_btn.clicked.connect(self._start_scan)
+        self.maint_review_btn.setVisible(False)
+        maint_layout.addWidget(self.maint_review_btn)
+
+        layout.addWidget(self.maint_frame)
+
         # ── Summary Card ────────────────────────────────────
         summary_frame = QFrame()
         summary_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         summary_layout = QVBoxLayout(summary_frame)
-        summary_layout.setContentsMargins(12, 8, 12, 8)
-        summary_layout.setSpacing(4)
+        summary_layout.setContentsMargins(10, 6, 10, 6)
+        summary_layout.setSpacing(3)
 
         summary_title = QLabel("SYSTEM CLEANUP")
         summary_title.setStyleSheet(section_header_style())
@@ -255,8 +354,8 @@ class CleanupPage(QWidget):
         disk_frame = QFrame()
         disk_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         disk_layout = QVBoxLayout(disk_frame)
-        disk_layout.setContentsMargins(12, 8, 12, 8)
-        disk_layout.setSpacing(3)
+        disk_layout.setContentsMargins(10, 6, 10, 6)
+        disk_layout.setSpacing(2)
 
         disk_header = QHBoxLayout()
         disk_title = QLabel("DISK STATUS")
@@ -336,8 +435,8 @@ class CleanupPage(QWidget):
         self.result_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         self.result_frame.setVisible(False)
         result_layout = QVBoxLayout(self.result_frame)
-        result_layout.setContentsMargins(12, 8, 12, 8)
-        result_layout.setSpacing(4)
+        result_layout.setContentsMargins(10, 6, 10, 6)
+        result_layout.setSpacing(3)
 
         self.result_title = QLabel("CLEANUP COMPLETE")
         self.result_title.setStyleSheet(f"""
@@ -363,14 +462,23 @@ class CleanupPage(QWidget):
 
     def refresh(self):
         self._load_disk_status()
+        self._check_maintenance()
 
     def _load_disk_status(self):
-        """Load disk diagnostics into the compact section."""
-        try:
-            from app.system.disk_analyzer import disk_analyzer, StoragePressure
-            from app.cleanup.cleanup_models import format_bytes
+        """Load disk diagnostics in background thread (non-blocking)."""
+        if self._disk_diag_thread and self._disk_diag_thread.isRunning():
+            return  # already running
+        self._disk_diag_thread = DiskDiagThread()
+        self._disk_diag_thread.complete.connect(self._apply_disk_status)
+        self._disk_diag_thread.start()
 
-            diag = disk_analyzer.diagnose()
+    def _apply_disk_status(self, diag):
+        """Apply disk diagnostics results on GUI thread."""
+        if diag is None:
+            return
+        try:
+            from app.system.disk_analyzer import StoragePressure
+            from app.cleanup.cleanup_models import format_bytes
 
             # Update pressure
             pressure_colors = {
@@ -398,9 +506,98 @@ class CleanupPage(QWidget):
                 self.disk_drive_label.setText("No system drive detected")
                 self.disk_free_label.setText("")
                 self.disk_type_label.setText("")
-
         except Exception as e:
-            logger.debug(f"Disk status load: {e}")
+            logger.debug(f"Disk status apply: {e}")
+        self._disk_diag_thread = None
+
+    def _check_maintenance(self):
+        """Evaluate maintenance status in background (non-blocking)."""
+        if self._maintenance_thread and self._maintenance_thread.isRunning():
+            return
+        self._maintenance_thread = MaintenanceCheckThread()
+        self._maintenance_thread.complete.connect(self._apply_maintenance)
+        self._maintenance_thread.start()
+
+    def _apply_maintenance(self, rec):
+        """Apply maintenance recommendation to UI (GUI thread)."""
+        if rec is None:
+            self.maint_status_label.setText("")
+            self.maint_main_label.setText("Unable to check maintenance status.")
+            self._maintenance_thread = None
+            return
+
+        from app.cleanup.maintenance_intelligence import (
+            MaintenanceStatus, maintenance_intelligence,
+        )
+
+        status = rec.status
+        icon = maintenance_intelligence.get_status_icon(status)
+        status_text = maintenance_intelligence.get_status_display(status)
+
+        # Status badge color
+        if status == MaintenanceStatus.RECOMMENDED_NOW:
+            badge_color = STATUS_WARN
+            main_color = TEXT_PRIMARY
+        elif status == MaintenanceStatus.RECOMMENDED_SOON:
+            badge_color = STATUS_INFO
+            main_color = TEXT_SECONDARY
+        else:
+            badge_color = STATUS_OK
+            main_color = STATUS_MUTED
+
+        self.maint_status_label.setText(f"{icon} {status_text}")
+        self.maint_status_label.setStyleSheet(f"""
+            color: {badge_color}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+            font-weight: {WEIGHT_BOLD}; border: none;
+        """)
+
+        # Main description
+        if status == MaintenanceStatus.NOT_NEEDED:
+            self.maint_main_label.setText("System maintenance is currently unnecessary.")
+            self.maint_main_label.setStyleSheet(f"""
+                color: {STATUS_MUTED}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM};
+                border: none;
+            """)
+            self.maint_review_btn.setVisible(False)
+        else:
+            main_text = f"{rec.estimated_reclaimable_display} reclaimable"
+            if rec.disk_free_percent > 0:
+                main_text += f"  |  {rec.disk_free_percent:.0f}% disk free"
+            self.maint_main_label.setText(main_text)
+            self.maint_main_label.setStyleSheet(f"""
+                color: {main_color}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM};
+                font-weight: {WEIGHT_MEDIUM}; border: none;
+            """)
+            self.maint_review_btn.setVisible(True)
+
+        # Reasons
+        if rec.reasons:
+            # Show top 3 reasons
+            reasons_text = "\n".join(f"\u2022 {r}" for r in rec.reasons[:3])
+            self.maint_detail_label.setText(reasons_text)
+        else:
+            self.maint_detail_label.setText("")
+
+        # Last checked / next review
+        if status == MaintenanceStatus.NOT_NEEDED:
+            footer = f"Last checked: Today"
+            if rec.next_recommended_display:
+                footer += f"  |  Next review: {rec.next_recommended_display}"
+            self.maint_detail_label.setText(
+                self.maint_detail_label.text() + "\n" + footer if self.maint_detail_label.text() else footer
+            )
+
+        # Record scan in history
+        try:
+            maintenance_intelligence.history.record_scan(
+                reclaimable_bytes=rec.estimated_reclaimable_bytes,
+                categories=rec.cleanup_categories,
+                items=rec.total_cleanup_items,
+            )
+        except Exception:
+            pass
+
+        self._maintenance_thread = None
 
     def _start_scan(self):
         """Start background scan."""
@@ -517,8 +714,26 @@ class CleanupPage(QWidget):
             f"Verification: {'PASSED' if session.verification_failed == 0 else 'PARTIAL'}"
         )
 
+        # Record in maintenance history
+        try:
+            from app.cleanup.maintenance_intelligence import maintenance_intelligence
+            categories_cleaned = list(set(
+                i.category.value for i in self._items
+                if i.selected and i.can_delete
+            ))
+            maintenance_intelligence.history.record_cleanup(
+                bytes_cleaned=session.bytes_freed,
+                categories=categories_cleaned,
+                success=session.success,
+                items_cleaned=session.files_deleted,
+            )
+        except Exception:
+            pass
+
         # Re-scan to show updated state
         self._start_scan()
+        # Re-check maintenance status
+        self._check_maintenance()
 
     def _clear_items(self):
         """Clear all item rows."""

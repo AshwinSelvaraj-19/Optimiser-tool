@@ -311,6 +311,59 @@ def button_secondary_style() -> str:
     """
 
 
+def button_success_style() -> str:
+    """Return success/apply button style (green accent)."""
+    return f"""
+        QPushButton {{
+            background-color: {STATUS_OK};
+            color: {TEXT_INVERSE};
+            border: none;
+            border-radius: {RADIUS_MD};
+            font-size: {FONT_SIZE_SM};
+            font-weight: {WEIGHT_BOLD};
+            padding: 8px 20px;
+            letter-spacing: 0.5px;
+        }}
+        QPushButton:hover {{
+            background-color: #2ea04380;
+        }}
+        QPushButton:pressed {{
+            background-color: #1a7f3780;
+        }}
+        QPushButton:disabled {{
+            background-color: {BORDER_LIGHT};
+            color: {TEXT_TERTIARY};
+        }}
+    """
+
+
+def button_danger_style() -> str:
+    """Return danger/stop button style."""
+    return f"""
+        QPushButton {{
+            background-color: transparent;
+            color: {STATUS_ERROR};
+            border: 1px solid {STATUS_ERROR};
+            border-radius: {RADIUS_MD};
+            font-size: {FONT_SIZE_SM};
+            font-weight: {WEIGHT_BOLD};
+            padding: 8px 20px;
+            letter-spacing: 0.5px;
+        }}
+        QPushButton:hover {{
+            background-color: {STATUS_ERROR}15;
+        }}
+        QPushButton:pressed {{
+            background-color: {STATUS_ERROR}30;
+        }}
+        QPushButton:disabled {{
+            background-color: {BORDER_LIGHT};
+            color: {TEXT_TERTIARY};
+            border-color: {BORDER_LIGHT};
+        }}
+    """
+
+
 def status_dot(color: str) -> str:
     """Return a styled status dot indicator."""
     return f'<span style="color:{color}; font-size:8px;">●</span>'

@@ -38,8 +38,8 @@ class TelemetryCard(QFrame):
     def __init__(self, title: str, unit: str = "%", parent=None):
         super().__init__(parent)
         self.setFrameStyle(QFrame.NoFrame)
-        self.setMinimumHeight(72)
-        self.setMaximumHeight(80)
+        self.setMinimumHeight(60)
+        self.setMaximumHeight(68)
         self.setStyleSheet(f"""
             QFrame {{
                 {card_style()}
@@ -139,6 +139,8 @@ class MonitorPage(QWidget):
         self._cards = {}
         self._worker_thread: MonitorWorkerThread | None = None
         self._worker_count = 0
+        self._pm_provider = None  # Cached PresentMonProvider
+        self._last_bottleneck = None  # Cached bottleneck from worker
         self._setup_ui()
         # Telemetry: 2s for fast cached reads
         self._timer = QTimer(self)
@@ -160,8 +162,8 @@ class MonitorPage(QWidget):
         scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
         scroll_content = QWidget()
         layout = QVBoxLayout(scroll_content)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(4)
         scroll.setWidget(scroll_content)
         outer.addWidget(scroll)
 
@@ -214,8 +216,8 @@ class MonitorPage(QWidget):
         resp_frame = QFrame()
         resp_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         resp_layout = QVBoxLayout(resp_frame)
-        resp_layout.setContentsMargins(12, 8, 12, 8)
-        resp_layout.setSpacing(3)
+        resp_layout.setContentsMargins(10, 6, 10, 6)
+        resp_layout.setSpacing(2)
 
         resp_header = QHBoxLayout()
         resp_title = QLabel("INPUT RESPONSIVENESS")
@@ -266,8 +268,8 @@ class MonitorPage(QWidget):
         thermal_frame = QFrame()
         thermal_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         thermal_layout = QVBoxLayout(thermal_frame)
-        thermal_layout.setContentsMargins(12, 8, 12, 8)
-        thermal_layout.setSpacing(3)
+        thermal_layout.setContentsMargins(10, 6, 10, 6)
+        thermal_layout.setSpacing(2)
 
         thermal_header = QHBoxLayout()
         thermal_title = QLabel("THERMAL")
@@ -321,8 +323,8 @@ class MonitorPage(QWidget):
             }}
         """)
         bn_layout = QVBoxLayout(bn_frame)
-        bn_layout.setContentsMargins(12, 8, 12, 8)
-        bn_layout.setSpacing(3)
+        bn_layout.setContentsMargins(10, 6, 10, 6)
+        bn_layout.setSpacing(2)
 
         bn_header = QLabel("BOTTLENECK")
         bn_header.setStyleSheet(card_title_style())
@@ -370,6 +372,8 @@ class MonitorPage(QWidget):
                 self._apply_input_latency(result.input_latency_report)
             if result.thermal_diag:
                 self._apply_thermal(result.thermal_diag)
+            if result.bottleneck_analysis:
+                self._apply_bottleneck(result.bottleneck_analysis)
         except Exception as e:
             logger.debug(f"Monitor worker apply: {e}")
         self._worker_thread = None
@@ -454,6 +458,42 @@ class MonitorPage(QWidget):
         except Exception as e:
             logger.debug(f"Thermal apply: {e}")
 
+    def _apply_bottleneck(self, analysis):
+        """Apply bottleneck results from background worker."""
+        try:
+            self._last_bottleneck = analysis
+            if analysis.primary_bottleneck:
+                bn = analysis.primary_bottleneck
+                self.bottleneck_name.setText(bn.name.upper())
+                if bn.severity in ("HIGH", "CRITICAL"):
+                    color = STATUS_ERROR
+                elif bn.severity == "MEDIUM":
+                    color = STATUS_WARN
+                else:
+                    color = STATUS_OK
+                self.bottleneck_name.setStyleSheet(f"""
+                    color: {color};
+                    font-family: {FONT_FAMILY};
+                    font-size: {FONT_SIZE_SM};
+                    font-weight: {WEIGHT_BOLD};
+                    border: none;
+                """)
+                self.bottleneck_detail.setText(
+                    f"{bn.confidence * 100:.0f}% confidence \u2014 {bn.description}"
+                )
+            else:
+                self.bottleneck_name.setText("NO BOTTLENECK")
+                self.bottleneck_name.setStyleSheet(f"""
+                    color: {STATUS_OK};
+                    font-family: {FONT_FAMILY};
+                    font-size: {FONT_SIZE_SM};
+                    font-weight: {WEIGHT_BOLD};
+                    border: none;
+                """)
+                self.bottleneck_detail.setText("System appears balanced")
+        except Exception as e:
+            logger.debug(f"Bottleneck apply: {e}")
+
     def _update_telemetry(self):
         try:
             frame = telemetry_engine.current
@@ -523,7 +563,9 @@ class MonitorPage(QWidget):
             # FPS — PresentMon only
             try:
                 from app.performance.presentmon_provider import PresentMonProvider
-                pm = PresentMonProvider()
+                if self._pm_provider is None:
+                    self._pm_provider = PresentMonProvider()
+                pm = self._pm_provider
                 metrics = pm.get_metrics()
                 if metrics.available and metrics.sample_count > 10:
                     # Record FPS into dashboard history
@@ -578,10 +620,13 @@ class MonitorPage(QWidget):
                 self._cards["FRAME VARIANCE"].set_na()
                 self._cards["SPIKES"].set_na()
 
-            # Bottleneck
-            from app.core.analyzer import bottleneck_analyzer
-            analysis = bottleneck_analyzer.analyze(frame)
-            if analysis.primary_bottleneck:
+            # Bottleneck — use cached result from worker (avoid ~11ms on GUI thread)
+            # Initial fallback before first worker result
+            if self._last_bottleneck is None:
+                from app.core.analyzer import bottleneck_analyzer
+                self._last_bottleneck = bottleneck_analyzer.analyze(frame)
+            analysis = self._last_bottleneck
+            if analysis and analysis.primary_bottleneck:
                 bn = analysis.primary_bottleneck
                 self.bottleneck_name.setText(bn.name.upper())
                 if bn.severity in ("HIGH", "CRITICAL"):
@@ -598,7 +643,7 @@ class MonitorPage(QWidget):
                     border: none;
                 """)
                 self.bottleneck_detail.setText(
-                    f"{bn.confidence * 100:.0f}% confidence — {bn.description}"
+                    f"{bn.confidence * 100:.0f}% confidence \u2014 {bn.description}"
                 )
             else:
                 self.bottleneck_name.setText("NO BOTTLENECK")
