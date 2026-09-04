@@ -18,7 +18,7 @@ from app.ui.theme import (
     FONT_FAMILY, FONT_MONO,
     FONT_SIZE_SM, FONT_SIZE_XS,
     WEIGHT_BOLD, WEIGHT_SEMIBOLD, WEIGHT_MEDIUM,
-    RADIUS_MD, card_style, button_primary_style, button_secondary_style,
+    RADIUS_MD, card_style, button_primary_style, button_secondary_style, button_success_style,
     card_title_style, opt_row_style, opt_row_name_style,
     opt_row_value_style, opt_row_status_style, loading_placeholder_style,
     no_data_style, status_indicator_style, metric_value_sm_style,
@@ -762,14 +762,14 @@ class OptimizerPage(QWidget):
         self.adaptive_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
         adapt_layout = QVBoxLayout(self.adaptive_frame)
         adapt_layout.setContentsMargins(10, 6, 10, 6)
-        adapt_layout.setSpacing(2)
+        adapt_layout.setSpacing(3)
 
         adapt_header = QHBoxLayout()
-        adapt_title = QLabel("ADAPTIVE OPTIMIZATION")
+        adapt_title = QLabel("ADAPTIVE")
         adapt_title.setStyleSheet(card_title_style())
         adapt_header.addWidget(adapt_title)
         adapt_header.addStretch()
-        self.adaptive_state_label = QLabel("")
+        self.adaptive_state_label = QLabel("IDLE")
         self.adaptive_state_label.setStyleSheet(f"""
             color: {TEXT_TERTIARY}; font-family: {FONT_MONO};
             font-size: {FONT_SIZE_XS}; border: none;
@@ -777,20 +777,42 @@ class OptimizerPage(QWidget):
         adapt_header.addWidget(self.adaptive_state_label)
         adapt_layout.addLayout(adapt_header)
 
-        self.adaptive_profile_label = QLabel("Profile: —")
-        self.adaptive_profile_label.setStyleSheet(f"""
+        self.adaptive_condition_label = QLabel("")
+        self.adaptive_condition_label.setWordWrap(True)
+        self.adaptive_condition_label.setStyleSheet(f"""
             color: {TEXT_SECONDARY}; font-family: {FONT_MONO};
             font-size: {FONT_SIZE_XS}; border: none;
         """)
-        adapt_layout.addWidget(self.adaptive_profile_label)
+        adapt_layout.addWidget(self.adaptive_condition_label)
 
-        self.adaptive_action_label = QLabel("Top: —")
+        self.adaptive_action_label = QLabel("")
         self.adaptive_action_label.setWordWrap(True)
         self.adaptive_action_label.setStyleSheet(f"""
             color: {TEXT_SECONDARY}; font-family: {FONT_FAMILY};
             font-size: {FONT_SIZE_XS}; border: none;
         """)
         adapt_layout.addWidget(self.adaptive_action_label)
+
+        # APPLY / DISMISS buttons (hidden by default)
+        self.adaptive_btn_row = QHBoxLayout()
+        self.adaptive_btn_row.setSpacing(6)
+        self.adaptive_apply_btn = QPushButton("APPLY")
+        self.adaptive_apply_btn.setFixedHeight(22)
+        self.adaptive_apply_btn.setCursor(Qt.PointingHandCursor)
+        self.adaptive_apply_btn.setStyleSheet(button_success_style())
+        self.adaptive_apply_btn.clicked.connect(self._on_adaptive_apply)
+        self.adaptive_apply_btn.setVisible(False)
+        self.adaptive_btn_row.addWidget(self.adaptive_apply_btn)
+
+        self.adaptive_dismiss_btn = QPushButton("DISMISS")
+        self.adaptive_dismiss_btn.setFixedHeight(22)
+        self.adaptive_dismiss_btn.setCursor(Qt.PointingHandCursor)
+        self.adaptive_dismiss_btn.setStyleSheet(button_secondary_style())
+        self.adaptive_dismiss_btn.clicked.connect(self._on_adaptive_dismiss)
+        self.adaptive_dismiss_btn.setVisible(False)
+        self.adaptive_btn_row.addWidget(self.adaptive_dismiss_btn)
+        self.adaptive_btn_row.addStretch()
+        adapt_layout.addLayout(self.adaptive_btn_row)
 
         layout.addWidget(self.adaptive_frame)
 
@@ -2188,35 +2210,140 @@ class OptimizerPage(QWidget):
             logger.debug(f"Recommendations load: {e}")
 
     def _apply_adaptive(self, result: OptimizerWorkerResult):
-        """Apply adaptive optimization status from worker result."""
+        """Apply adaptive engine status from worker result."""
         try:
-            state = result.adaptive_state
-            confidence = result.adaptive_confidence
-            plan = result.adaptive_plan
-            if state is None or plan is None:
-                return
-            state_str = state.value.replace("_", " ").title()
+            from app.core.adaptive_engine import adaptive_engine, AdaptiveEngineState
 
-            self.adaptive_profile_label.setText(f"Profile: {plan.recommended_profile.upper()}")
+            ui_state = adaptive_engine.get_ui_state()
+            engine_state = ui_state.get("state", "IDLE")
+            conditions = ui_state.get("conditions", {})
+            rec = ui_state.get("recommendation")
+            applied_count = ui_state.get("applied_count", 0)
+            sample_count = ui_state.get("sample_count", 0)
 
-            applicable = [a for a in plan.actions if a.status.value in (
-                "APPLIED", "ALREADY_OPTIMAL", "REQUIRES_ADMIN", "RECOMMENDATION_ONLY",
-            )]
-            if applicable:
-                first = applicable[0]
-                self.adaptive_action_label.setText(
-                    f"Top: {first.optimization_name} — {first.status.value.replace('_', ' ')}"
-                )
+            # State label
+            state_colors = {
+                "IDLE": TEXT_TERTIARY,
+                "MONITORING": STATUS_MUTED,
+                "RECOMMENDING": ACCENT_LIGHT,
+                "AWAITING_APPROVAL": STATUS_WARN,
+                "APPLYING": ACCENT_LIGHT,
+                "OBSERVING_IMPACT": ACCENT_LIGHT,
+                "ROLLING_BACK": STATUS_ERROR,
+                "STOPPED": TEXT_TERTIARY,
+            }
+            color = state_colors.get(engine_state, TEXT_TERTIARY)
+            self.adaptive_state_label.setText(engine_state)
+            self.adaptive_state_label.setStyleSheet(f"""
+                color: {color}; font-family: {FONT_MONO};
+                font-size: {FONT_SIZE_XS}; border: none;
+            """)
+
+            # Condition display
+            if conditions:
+                cond_lines = []
+                for ct, info in conditions.items():
+                    dur = info.get("duration", 0)
+                    cur = info.get("current", 0)
+                    base = info.get("baseline", 0)
+                    cond_lines.append(
+                        f"{ct}: {cur:.0f} (baseline: {base:.0f}, {dur:.0f}s)"
+                    )
+                self.adaptive_condition_label.setText("\n".join(cond_lines))
+                self.adaptive_condition_label.setStyleSheet(f"""
+                    color: {STATUS_WARN}; font-family: {FONT_MONO};
+                    font-size: {FONT_SIZE_XS}; border: none;
+                """)
+            elif sample_count > 0:
+                self.adaptive_condition_label.setText(f"Monitoring ({sample_count} samples)")
+                self.adaptive_condition_label.setStyleSheet(f"""
+                    color: {TEXT_TERTIARY}; font-family: {FONT_MONO};
+                    font-size: {FONT_SIZE_XS}; border: none;
+                """)
             else:
-                if state.value == "OPTIMAL":
-                    self.adaptive_action_label.setText("System is optimal — no actions needed")
-                elif state.value == "INSUFFICIENT_DATA":
-                    self.adaptive_action_label.setText("Collect more telemetry")
+                self.adaptive_condition_label.setText("")
+
+            # Recommendation display
+            if rec and engine_state == "AWAITING_APPROVAL":
+                title = rec.get("title", "")
+                reason = rec.get("reason", "")
+                confidence = rec.get("confidence", 0)
+                risk = rec.get("risk", "LOW")
+                self.adaptive_action_label.setText(
+                    f"{title}\n{reason}\nConfidence: {confidence:.0f}% | Risk: {risk}"
+                )
+                self.adaptive_action_label.setStyleSheet(f"""
+                    color: {STATUS_WARN}; font-family: {FONT_FAMILY};
+                    font-size: {FONT_SIZE_XS}; border: none;
+                """)
+                self.adaptive_apply_btn.setVisible(True)
+                self.adaptive_dismiss_btn.setVisible(True)
+                self.adaptive_apply_btn.setEnabled(True)
+            elif rec and engine_state == "OBSERVING_IMPACT":
+                self.adaptive_action_label.setText("Optimization applied — observing impact...")
+                self.adaptive_action_label.setStyleSheet(f"""
+                    color: {ACCENT_LIGHT}; font-family: {FONT_FAMILY};
+                    font-size: {FONT_SIZE_XS}; border: none;
+                """)
+                self.adaptive_apply_btn.setVisible(False)
+                self.adaptive_dismiss_btn.setVisible(False)
+            elif engine_state == "ROLLING_BACK":
+                self.adaptive_action_label.setText("Harmful change detected — rolling back...")
+                self.adaptive_action_label.setStyleSheet(f"""
+                    color: {STATUS_ERROR}; font-family: {FONT_FAMILY};
+                    font-size: {FONT_SIZE_XS}; border: none;
+                """)
+                self.adaptive_apply_btn.setVisible(False)
+                self.adaptive_dismiss_btn.setVisible(False)
+            else:
+                if applied_count > 0:
+                    self.adaptive_action_label.setText(f"{applied_count} optimization(s) applied this session")
+                    self.adaptive_action_label.setStyleSheet(f"""
+                        color: {STATUS_OK}; font-family: {FONT_FAMILY};
+                        font-size: {FONT_SIZE_XS}; border: none;
+                    """)
                 else:
                     self.adaptive_action_label.setText("")
+                self.adaptive_apply_btn.setVisible(False)
+                self.adaptive_dismiss_btn.setVisible(False)
 
         except Exception as e:
             logger.debug(f"Adaptive status load: {e}")
+
+    def _on_adaptive_apply(self):
+        """Handle APPLY button click for adaptive recommendation."""
+        try:
+            from app.core.adaptive_engine import adaptive_engine
+            # Disable buttons immediately to prevent double-click
+            self.adaptive_apply_btn.setEnabled(False)
+            self.adaptive_dismiss_btn.setEnabled(False)
+            self.adaptive_action_label.setText("Applying...")
+            # Read recommendation inside thread to avoid TOCTOU race
+            import threading
+            def _do_apply():
+                try:
+                    rec = adaptive_engine.active_recommendation
+                    if rec:
+                        adaptive_engine.approve(rec.recommendation_id)
+                        adaptive_engine.apply_recommendation()
+                except Exception as e:
+                    logger.debug(f"Adaptive apply error: {e}")
+            threading.Thread(target=_do_apply, daemon=True, name="adaptive_apply").start()
+        except Exception as e:
+            logger.debug(f"Adaptive apply: {e}")
+
+    def _on_adaptive_dismiss(self):
+        """Handle DISMISS button click for adaptive recommendation."""
+        try:
+            from app.core.adaptive_engine import adaptive_engine
+            rec = adaptive_engine.active_recommendation
+            if rec:
+                adaptive_engine.dismiss(rec.recommendation_id)
+                self.adaptive_apply_btn.setVisible(False)
+                self.adaptive_dismiss_btn.setVisible(False)
+                self.adaptive_action_label.setText("Dismissed")
+        except Exception as e:
+            logger.debug(f"Adaptive dismiss: {e}")
 
     def _apply_input(self, result: OptimizerWorkerResult):
         """Apply input & gameplay status from worker result."""

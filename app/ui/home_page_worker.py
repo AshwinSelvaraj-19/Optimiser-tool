@@ -68,6 +68,19 @@ class HomePageResult:
     # gaming analysis (cheap, but still uses telemetry)
     decision: Optional[Any] = None
 
+    # gaming session
+    session_active: bool = False
+    session_state: str = "IDLE"
+    session_target: str = ""
+    session_pid: int = 0
+    session_duration: float = 0.0
+    session_applied: int = 0
+    session_cpu: Optional[float] = None
+    session_gpu: Optional[float] = None
+    session_ram: Optional[float] = None
+    session_fps: Optional[float] = None
+    session_recent: list = field(default_factory=list)  # recent session summaries
+
 
 # ── worker ─────────────────────────────────────────────────────────
 
@@ -134,7 +147,70 @@ class _HomePageWorker(QObject):
         except Exception:
             pass
 
+        # Gaming session status (lightweight — reads singleton state)
+        try:
+            from app.gaming.gaming_lifecycle import gaming_lifecycle, LifecycleState
+            mgr = gaming_lifecycle
+            if mgr.is_active and mgr.session:
+                s = mgr.session
+                r.session_active = True
+                r.session_state = s.state
+                r.session_target = s.target_name
+                r.session_pid = s.target_pid
+                # Duration
+                if s.started_at:
+                    try:
+                        from datetime import datetime
+                        start = datetime.fromisoformat(s.started_at)
+                        r.session_duration = (datetime.now() - start).total_seconds()
+                    except Exception:
+                        pass
+                r.session_applied = sum(
+                    1 for c in s.changes
+                    if c.status.value in ("APPLIED", "VERIFIED")
+                )
+                # Read cached telemetry for live session metrics
+                try:
+                    from app.core.telemetry import telemetry_engine
+                    frame = telemetry_engine.current
+                    if frame.cpu_utilization > 0:
+                        r.session_cpu = frame.cpu_utilization
+                    if frame.gpu_utilization > 0:
+                        r.session_gpu = frame.gpu_utilization
+                    if frame.ram_percent > 0:
+                        r.session_ram = frame.ram_percent
+                except Exception:
+                    pass
+                # FPS
+                try:
+                    from app.performance.fps_provider import fps_registry
+                    if fps_registry.active and hasattr(fps_registry.active, 'get_metrics'):
+                        metrics = fps_registry.active.get_metrics()
+                        if metrics and metrics.available and metrics.sample_count > 0:
+                            fps_val = metrics.median_fps if metrics.median_fps > 0 else metrics.avg_fps
+                            if fps_val > 0:
+                                r.session_fps = fps_val
+                except Exception:
+                    pass
+            else:
+                r.session_active = False
+        except Exception:
+            pass
 
+        # Recent session history (bounded, cheap)
+        try:
+            from app.gaming.gaming_lifecycle import gaming_lifecycle
+            history = gaming_lifecycle.load_history(count=5)
+            for h in history:
+                r.session_recent.append({
+                    "target": h.get("target_name", "Unknown"),
+                    "duration": h.get("duration_seconds", 0),
+                    "applied": h.get("changes_applied", 0),
+                    "state": h.get("state", "?"),
+                    "ended": h.get("ended_at", ""),
+                })
+        except Exception:
+            pass
 class HomePageWorkerThread(QThread):
     """Manages the HomePage worker lifecycle."""
 

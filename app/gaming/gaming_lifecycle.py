@@ -931,8 +931,33 @@ class GamingLifecycleManager:
         self._worker_thread.start()
         logger.info("Monitoring worker started")
 
+        # Start adaptive engine for this session
+        try:
+            from app.core.adaptive_engine import adaptive_engine
+            baseline_data = {}
+            if self._session and self._session.baseline:
+                b = self._session.baseline
+                baseline_data = {
+                    "cpu_percent": b.cpu_percent,
+                    "gpu_percent": b.gpu_percent,
+                    "ram_percent": b.ram_percent,
+                    "fps": b.fps,
+                    "frame_time_ms": b.frame_time_ms,
+                    "gpu_temp": b.gpu_temp,
+                }
+            adaptive_engine.start_session(
+                session_id=self._session.session_id if self._session else "",
+                baseline=baseline_data,
+            )
+        except Exception as e:
+            logger.debug(f"Adaptive engine start failed: {e}")
+
     def _monitor_loop(self):
-        """Background monitoring loop."""
+        """Background monitoring loop.
+
+        Collects lightweight telemetry each tick and feeds it to the adaptive engine.
+        Runs adaptive analysis every 10s and checks deferred impact evaluation.
+        """
         session = self._session
         if not session:
             return
@@ -946,6 +971,13 @@ class GamingLifecycleManager:
                     self._on_target_lost()
                     return
 
+                # Collect lightweight telemetry for adaptive engine
+                self._ingest_telemetry_tick()
+
+                # Adaptive analysis every 10 seconds
+                if tick_count > 0 and tick_count % 10 == 0:
+                    self._run_adaptive_analysis()
+
                 # Periodic validation
                 if tick_count > 0 and tick_count % 30 == 0:
                     self._validate(session)
@@ -955,6 +987,54 @@ class GamingLifecycleManager:
                 logger.debug(f"Monitor tick error: {e}")
 
             time.sleep(1.0)
+
+    def _ingest_telemetry_tick(self):
+        """Collect lightweight system telemetry and feed to adaptive engine."""
+        try:
+            import psutil
+            from app.core.adaptive_engine import adaptive_engine, TelemetryPoint
+
+            # Skip if engine is not active
+            if adaptive_engine.state.value in ("IDLE", "STOPPED"):
+                return
+
+            point = TelemetryPoint(
+                timestamp=time.time(),
+                cpu_percent=psutil.cpu_percent(interval=0),
+            )
+
+            vm = psutil.virtual_memory()
+            point.ram_percent = vm.percent
+
+            # Target process CPU if available
+            session = self._session
+            if session and session.target_pid:
+                try:
+                    proc = psutil.Process(session.target_pid)
+                    point.target_cpu = proc.cpu_percent(interval=0)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+
+            adaptive_engine.ingest(point)
+        except Exception as e:
+            logger.debug(f"Telemetry ingest error: {e}")
+
+    def _run_adaptive_analysis(self):
+        """Run adaptive analysis cycle and check deferred impact."""
+        try:
+            from app.core.adaptive_engine import adaptive_engine
+
+            # Skip if engine is not active
+            if adaptive_engine.state.value in ("IDLE", "STOPPED"):
+                return
+
+            # Check deferred impact observation
+            adaptive_engine.check_impact()
+
+            # Run analysis cycle
+            adaptive_engine.analyze()
+        except Exception as e:
+            logger.debug(f"Adaptive analysis error: {e}")
 
     def _check_target_alive(self, pid: int) -> bool:
         """Check if target process is still running."""
@@ -1033,6 +1113,15 @@ class GamingLifecycleManager:
         self._worker_running = False
         if self._worker_thread and self._worker_thread.is_alive():
             self._worker_thread.join(timeout=5.0)
+
+        # Stop adaptive engine
+        try:
+            from app.core.adaptive_engine import adaptive_engine
+            adaptive_records = adaptive_engine.stop_session()
+            if adaptive_records:
+                logger.info(f"Adaptive engine: {len(adaptive_records)} records saved")
+        except Exception as e:
+            logger.debug(f"Adaptive engine stop failed: {e}")
 
         self._set_state(session, LifecycleState.STOPPING)
 
@@ -1304,6 +1393,282 @@ class GamingLifecycleManager:
             return records
         except Exception:
             return []
+
+    # ══════════════════════════════════════════════════════════════
+    #  STEP 11: ABNORMAL SHUTDOWN RECOVERY
+    # ══════════════════════════════════════════════════════════════
+
+    def recover_incomplete_sessions(self) -> List[Dict]:
+        """Detect and recover sessions interrupted by abnormal shutdown.
+        
+        Recovery behavior:
+        - Early states (DETECTING/BASELINE/RECOMMENDING/AWAITING_APPROVAL):
+          No changes applied → mark FAILED, no restoration needed.
+        - States with applied changes (APPLYING/MONITORING/STOPPING/RESTORING/REPORTING):
+          Restore each reversible APPLIED/VERIFIED change individually.
+          Handle partial failures without losing remaining rollback info.
+        - Idempotent: if already recovered, skip without re-restoring.
+        - Corrupted files: skip with warning, never crash.
+        - Missing rollback_data: mark IRREVERSIBLE, skip restoration.
+        
+        Returns a list of recovery result dicts for each session processed.
+        """
+        results = []
+        try:
+            if not os.path.exists(SESSIONS_DIR):
+                return []
+
+            # Only process files modified after the last successful run
+            # to avoid re-processing already-recovered sessions
+            for fname in sorted(
+                os.listdir(SESSIONS_DIR),
+                key=lambda f: os.path.getmtime(os.path.join(SESSIONS_DIR, f)),
+                reverse=True,
+            )[:20]:
+                if not fname.endswith(".json"):
+                    continue
+                filepath = os.path.join(SESSIONS_DIR, fname)
+                result = self._recover_single_session(filepath)
+                if result:
+                    results.append(result)
+        except Exception as e:
+            logger.error(f"Recovery scan failed: {e}")
+
+        return results
+
+    def _recover_single_session(self, filepath: str) -> Optional[Dict]:
+        """Recover a single interrupted session file.
+        
+        Returns a recovery result dict, or None if no action was needed.
+        """
+        # Load and validate the session file
+        data = self._load_session_file(filepath)
+        if data is None:
+            return None
+
+        session_id = data.get("session_id", "unknown")
+        state = data.get("state", "")
+        recovery_status = data.get("recovery_status")
+
+        # Idempotency: skip if already recovered
+        if recovery_status in ("RECOVERED", "RECOVERY_FAILED", "NO_RESTORE_NEEDED"):
+            return None
+
+        # Terminal states: nothing to recover
+        if state in ("COMPLETED", "FAILED", "IDLE"):
+            return None
+
+        # Early states: no changes applied, just mark failed
+        if state in ("DETECTING", "BASELINE", "RECOMMENDING", "AWAITING_APPROVAL"):
+            return self._mark_session_failed(filepath, data, session_id, state)
+
+        # States with potential applied changes: attempt restoration
+        changes = data.get("changes", [])
+        applied_changes = [
+            c for c in changes
+            if c.get("status") in ("APPLIED", "VERIFIED")
+        ]
+
+        if not applied_changes:
+            # No applied changes to restore
+            return self._mark_session_no_restore(filepath, data, session_id, state)
+
+        # Attempt restoration of each applied change
+        return self._restore_session_changes(filepath, data, session_id, state, applied_changes)
+
+    def _load_session_file(self, filepath: str) -> Optional[Dict]:
+        """Load a session JSON file with corruption handling."""
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                logger.warning(f"Corrupted session (not a dict): {filepath}")
+                return None
+            # Validate required fields
+            if "session_id" not in data or "state" not in data:
+                logger.warning(f"Corrupted session (missing fields): {filepath}")
+                return None
+            return data
+        except json.JSONDecodeError as e:
+            logger.warning(f"Corrupted session JSON: {filepath}: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to read session file: {filepath}: {e}")
+            return None
+
+    def _mark_session_failed(
+        self, filepath: str, data: Dict, session_id: str, state: str
+    ) -> Dict:
+        """Mark an early-state session as FAILED (no restoration needed)."""
+        data["state"] = "FAILED"
+        data["recovery_status"] = "NO_RESTORE_NEEDED"
+        data["recovery_timestamp"] = datetime.now().isoformat()
+        data["recovery_notes"] = f"Session in state {state} had no changes applied."
+        self._persist_session_file(filepath, data)
+        logger.info(f"Recovery: session {session_id} in {state} -> FAILED (no restore needed)")
+        return {
+            "session_id": session_id,
+            "original_state": state,
+            "recovery_status": "NO_RESTORE_NEEDED",
+            "changes_restored": 0,
+            "changes_failed": 0,
+        }
+
+    def _mark_session_no_restore(
+        self, filepath: str, data: Dict, session_id: str, state: str
+    ) -> Dict:
+        """Mark a session with no applied changes as recovered."""
+        data["state"] = "FAILED"
+        data["recovery_status"] = "NO_RESTORE_NEEDED"
+        data["recovery_timestamp"] = datetime.now().isoformat()
+        data["recovery_notes"] = f"Session in state {state} had no applied changes."
+        self._persist_session_file(filepath, data)
+        logger.info(f"Recovery: session {session_id} in {state} -> no applied changes")
+        return {
+            "session_id": session_id,
+            "original_state": state,
+            "recovery_status": "NO_RESTORE_NEEDED",
+            "changes_restored": 0,
+            "changes_failed": 0,
+        }
+
+    def _restore_session_changes(
+        self, filepath: str, data: Dict, session_id: str,
+        state: str, applied_changes: List[Dict],
+    ) -> Dict:
+        """Attempt to restore applied changes from an interrupted session.
+        
+        Handles partial failures: each change is restored independently.
+        Missing or invalid rollback_data marks the change as IRREVERSIBLE.
+        """
+        restored_count = 0
+        failed_count = 0
+        restored_ids = []
+        failed_details = []
+
+        for change_data in applied_changes:
+            change_id = change_data.get("change_id", "unknown")
+            name = change_data.get("name", "unknown")
+            category = change_data.get("category", "")
+            change_type = change_data.get("change_type", "TEMPORARY")
+            reversible = change_data.get("reversible", True)
+            rollback_data = change_data.get("rollback_data", {})
+
+            # Only restore TEMPORARY changes that are reversible
+            if change_type != "TEMPORARY":
+                change_data["status"] = "KEPT"
+                logger.info(f"Recovery: keeping permanent change: {name}")
+                continue
+
+            if not reversible:
+                change_data["status"] = "IRREVERSIBLE"
+                logger.warning(f"Recovery: change marked irreversible: {name}")
+                failed_count += 1
+                failed_details.append({"change_id": change_id, "reason": "irreversible"})
+                continue
+
+            # Validate rollback_data
+            if not rollback_data or not isinstance(rollback_data, dict):
+                change_data["status"] = "RESTORE_FAILED"
+                logger.warning(f"Recovery: missing rollback data for {name}")
+                failed_count += 1
+                failed_details.append({
+                    "change_id": change_id, "reason": "missing_rollback_data",
+                })
+                continue
+
+            # Attempt restoration
+            try:
+                success = self._restore_change_from_data(category, rollback_data)
+                if success:
+                    change_data["status"] = "RESTORED"
+                    restored_count += 1
+                    restored_ids.append(change_id)
+                    logger.info(f"Recovery: restored {name} ({category})")
+                else:
+                    change_data["status"] = "RESTORE_FAILED"
+                    failed_count += 1
+                    failed_details.append({
+                        "change_id": change_id, "reason": "restore_fn_returned_false",
+                    })
+                    logger.warning(f"Recovery: failed to restore {name} ({category})")
+            except Exception as e:
+                change_data["status"] = "RESTORE_FAILED"
+                failed_count += 1
+                failed_details.append({
+                    "change_id": change_id, "reason": str(e),
+                })
+                logger.error(f"Recovery: error restoring {name}: {e}")
+
+        # Determine overall recovery status
+        if failed_count == 0 and restored_count > 0:
+            recovery_status = "RECOVERED"
+        elif restored_count > 0 and failed_count > 0:
+            recovery_status = "PARTIAL_RECOVERY"
+        elif failed_count > 0 and restored_count == 0:
+            recovery_status = "RECOVERY_FAILED"
+        else:
+            recovery_status = "NO_RESTORE_NEEDED"
+
+        # Persist updated session
+        data["state"] = "RECOVERED" if recovery_status in ("RECOVERED", "PARTIAL_RECOVERY") else "FAILED"
+        data["recovery_status"] = recovery_status
+        data["recovery_timestamp"] = datetime.now().isoformat()
+        data["recovery_notes"] = (
+            f"Restored {restored_count}/{restored_count + failed_count} changes. "
+            f"Original state: {state}."
+        )
+        data["changes"] = changes = data.get("changes", [])
+        # Note: changes are already mutated in-place above
+        self._persist_session_file(filepath, data)
+
+        logger.info(
+            f"Recovery: session {session_id} -> {recovery_status} "
+            f"(restored={restored_count}, failed={failed_count})"
+        )
+
+        return {
+            "session_id": session_id,
+            "original_state": state,
+            "recovery_status": recovery_status,
+            "changes_restored": restored_count,
+            "changes_failed": failed_count,
+            "restored_ids": restored_ids,
+            "failed_details": failed_details,
+        }
+
+    def _restore_change_from_data(
+        self, category: str, rollback_data: Dict[str, Any]
+    ) -> bool:
+        """Restore a single change using persisted rollback data.
+        
+        This mirrors _restore_single but works from raw dict data
+        rather than a LifecycleChange object.
+        """
+        if category == "power":
+            plan = rollback_data.get("previous_plan", "")
+            if plan:
+                return self._apply_power_plan(plan.lower().replace(" ", "_"))
+            return False
+
+        elif category == "game_mode":
+            previous = rollback_data.get("previous_enabled", True)
+            return self._apply_game_mode(previous)
+
+        elif category == "background":
+            # Background CPU restoration is not directly possible
+            return True
+
+        logger.debug(f"No restore handler for category: {category}")
+        return False
+
+    def _persist_session_file(self, filepath: str, data: Dict):
+        """Persist updated session data to disk."""
+        try:
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, default=str)
+        except Exception as e:
+            logger.error(f"Failed to persist recovery state: {filepath}: {e}")
 
     # ══════════════════════════════════════════════════════════════
     #  CLI FORMAT

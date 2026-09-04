@@ -26,7 +26,7 @@ from app.ui.theme import (
     RADIUS_MD, RADIUS_LG, RADIUS_XL,
     SPACING_SM, SPACING_MD, SPACING_LG, SPACING_XL,
     metric_color, temp_color, card_style, button_primary_style,
-    button_secondary_style,
+    button_secondary_style, button_danger_style,
     section_header_style, metric_title_style, metric_value_style,
     unit_label_style, status_indicator_style,
 )
@@ -228,6 +228,7 @@ class HomePage(QWidget):
         self._last_result = result
         try:
             self._apply_target(result)
+            self._apply_gaming_session(result)
             self._apply_status(result)
             self._apply_gaming_analysis(result)
             self._apply_recommendations(result)
@@ -329,6 +330,116 @@ class HomePage(QWidget):
             )
         else:
             self.target_panel.set_not_detected()
+
+    def _apply_gaming_session(self, result: HomePageResult):
+        """Update the GAMING SESSION card from worker result."""
+        try:
+            if result.session_active:
+                state = result.session_state
+                if state in ("MONITORING",):
+                    self._gs_status.setText(f"● {state}")
+                    self._gs_status.setStyleSheet(f"""
+                        color: {STATUS_OK};
+                        font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS};
+                        font-weight: {WEIGHT_SEMIBOLD}; letter-spacing: 1px;
+                        border: none;
+                    """)
+                elif state in ("APPLYING", "RECOMMENDING", "BASELINE", "DETECTING"):
+                    self._gs_status.setText(f"● {state}")
+                    self._gs_status.setStyleSheet(f"""
+                        color: {ACCENT_LIGHT};
+                        font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS};
+                        font-weight: {WEIGHT_SEMIBOLD}; letter-spacing: 1px;
+                        border: none;
+                    """)
+                elif state in ("STOPPING", "RESTORING"):
+                    self._gs_status.setText(f"● {state}")
+                    self._gs_status.setStyleSheet(f"""
+                        color: {STATUS_WARN};
+                        font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS};
+                        font-weight: {WEIGHT_SEMIBOLD}; letter-spacing: 1px;
+                        border: none;
+                    """)
+                elif state in ("FAILED",):
+                    self._gs_status.setText(f"● {state}")
+                    self._gs_status.setStyleSheet(f"""
+                        color: {STATUS_ERROR};
+                        font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS};
+                        font-weight: {WEIGHT_SEMIBOLD}; letter-spacing: 1px;
+                        border: none;
+                    """)
+                else:
+                    self._gs_status.setText(f"● {state}")
+                    self._gs_status.setStyleSheet(f"""
+                        color: {TEXT_TERTIARY};
+                        font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS};
+                        font-weight: {WEIGHT_SEMIBOLD}; letter-spacing: 1px;
+                        border: none;
+                    """)
+
+                self._gs_target.setText(f"{result.session_target}  PID {result.session_pid}")
+                mins = int(result.session_duration) // 60
+                secs = int(result.session_duration) % 60
+                self._gs_duration.setText(f"{mins:02d}:{secs:02d}")
+
+                # Metrics
+                self._gs_cpu.setText(f"CPU {result.session_cpu:.0f}%" if result.session_cpu is not None else "CPU --")
+                self._gs_gpu.setText(f"GPU {result.session_gpu:.0f}%" if result.session_gpu is not None else "GPU --")
+                self._gs_ram.setText(f"RAM {result.session_ram:.0f}%" if result.session_ram is not None else "RAM --")
+                self._gs_fps.setText(f"FPS {result.session_fps:.0f}" if result.session_fps is not None else "FPS --")
+                self._gs_applied.setText(f"OPT {result.session_applied}" if result.session_applied > 0 else "OPT 0")
+            else:
+                # No active session — show recent history
+                self._gs_status.setText("NO SESSION")
+                self._gs_status.setStyleSheet(f"""
+                    color: {TEXT_TERTIARY};
+                    font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS};
+                    font-weight: {WEIGHT_SEMIBOLD}; letter-spacing: 1px;
+                    border: none;
+                """)
+                self._gs_target.setText("")
+                self._gs_duration.setText("")
+                self._gs_cpu.setText("CPU --")
+                self._gs_gpu.setText("GPU --")
+                self._gs_ram.setText("RAM --")
+                self._gs_fps.setText("FPS --")
+                self._gs_applied.setText("OPT --")
+                # Show last session info if available
+                if result.session_recent:
+                    last = result.session_recent[0]
+                    target = last.get("target", "Unknown")
+                    dur = last.get("duration", 0)
+                    applied = last.get("applied", 0)
+                    self._gs_target.setText(f"Last: {target} ({dur:.0f}s, {applied} opts)")
+
+            # Show/hide stop button based on session state
+            self.stop_session_btn.setVisible(result.session_active)
+        except Exception as e:
+            logger.debug(f"Gaming session apply: {e}")
+
+    def _on_stop_session(self):
+        """Stop the active gaming session from the home page."""
+        try:
+            from app.gaming.gaming_lifecycle import gaming_lifecycle
+            if gaming_lifecycle.is_active:
+                self.stop_session_btn.setEnabled(False)
+                self._gs_status.setText("STOPPING")
+                self._gs_status.setStyleSheet(f"""
+                    color: {STATUS_WARN};
+                    font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS};
+                    font-weight: {WEIGHT_SEMIBOLD}; letter-spacing: 1px;
+                    border: none;
+                """)
+                # Run stop in a thread to avoid blocking GUI
+                import threading
+                def _do_stop():
+                    try:
+                        gaming_lifecycle.stop()
+                    except Exception:
+                        pass
+                threading.Thread(target=_do_stop, daemon=True, name="home_session_stop").start()
+        except Exception as e:
+            logger.debug(f"Stop session: {e}")
 
     def _apply_status(self, result: HomePageResult):
         try:
@@ -514,6 +625,67 @@ class HomePage(QWidget):
 
         self.target_panel = TargetPanel()
         layout.addWidget(self.target_panel)
+
+        # ── Section: GAMING SESSION ─────────────────────────
+        self._gs_section = QLabel("GAMING SESSION")
+        self._gs_section.setStyleSheet(section_header_style())
+        layout.addWidget(self._gs_section)
+
+        self._gs_frame = QFrame()
+        self._gs_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
+        gs_layout = QVBoxLayout(self._gs_frame)
+        gs_layout.setContentsMargins(10, 4, 10, 4)
+        gs_layout.setSpacing(2)
+
+        # Status + target row
+        gs_top = QHBoxLayout()
+        gs_top.setSpacing(8)
+        self._gs_status = QLabel("NO SESSION")
+        self._gs_status.setStyleSheet(f"""
+            color: {TEXT_TERTIARY};
+            font-family: {FONT_FAMILY}; font-size: {FONT_SIZE_XS};
+            font-weight: {WEIGHT_SEMIBOLD}; letter-spacing: 1px;
+            border: none;
+        """)
+        gs_top.addWidget(self._gs_status)
+        self._gs_target = QLabel("")
+        self._gs_target.setStyleSheet(f"""
+            color: {TEXT_SECONDARY};
+            font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+            border: none;
+        """)
+        gs_top.addWidget(self._gs_target)
+        self._gs_duration = QLabel("")
+        self._gs_duration.setStyleSheet(f"""
+            color: {TEXT_TERTIARY};
+            font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS};
+            border: none;
+        """)
+        gs_top.addStretch()
+        gs_top.addWidget(self._gs_duration)
+        gs_layout.addLayout(gs_top)
+
+        # Metrics row (CPU / GPU / RAM / FPS)
+        gs_metrics = QHBoxLayout()
+        gs_metrics.setSpacing(12)
+        self._gs_cpu = QLabel("CPU --")
+        self._gs_cpu.setStyleSheet(f"color: {TEXT_SECONDARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS}; border: none;")
+        gs_metrics.addWidget(self._gs_cpu)
+        self._gs_gpu = QLabel("GPU --")
+        self._gs_gpu.setStyleSheet(f"color: {TEXT_SECONDARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS}; border: none;")
+        gs_metrics.addWidget(self._gs_gpu)
+        self._gs_ram = QLabel("RAM --")
+        self._gs_ram.setStyleSheet(f"color: {TEXT_SECONDARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS}; border: none;")
+        gs_metrics.addWidget(self._gs_ram)
+        self._gs_fps = QLabel("FPS --")
+        self._gs_fps.setStyleSheet(f"color: {TEXT_SECONDARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS}; border: none;")
+        gs_metrics.addWidget(self._gs_fps)
+        self._gs_applied = QLabel("OPT --")
+        self._gs_applied.setStyleSheet(f"color: {TEXT_TERTIARY}; font-family: {FONT_MONO}; font-size: {FONT_SIZE_XS}; border: none;")
+        gs_metrics.addWidget(self._gs_applied)
+        gs_layout.addLayout(gs_metrics)
+
+        layout.addWidget(self._gs_frame)
 
         # ── Section: PERFORMANCE ─────────────────────────────
         section_perf = QLabel("PERFORMANCE")
@@ -749,6 +921,15 @@ class HomePage(QWidget):
         self.diagnostic_btn.clicked.connect(lambda: self.navigate_to.emit("tools"))
         actions_layout.addWidget(self.diagnostic_btn)
         self._hidden_widgets.append(self.diagnostic_btn)
+
+        # Stop session button (hidden by default, shown during active session)
+        self.stop_session_btn = QPushButton("STOP SESSION")
+        self.stop_session_btn.setFixedHeight(24)
+        self.stop_session_btn.setCursor(Qt.PointingHandCursor)
+        self.stop_session_btn.setStyleSheet(button_danger_style())
+        self.stop_session_btn.clicked.connect(self._on_stop_session)
+        self.stop_session_btn.setVisible(False)
+        actions_layout.addWidget(self.stop_session_btn)
 
         actions_layout.addStretch()
         layout.addLayout(actions_layout)

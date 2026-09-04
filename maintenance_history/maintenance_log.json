@@ -1,0 +1,11 @@
+{
+  "records": [
+    {
+      "type": "scan",
+      "timestamp": "2026-09-04T10:57:18",
+      "reclaimable_bytes": 38769120,
+      "categories": 1,
+      "items": 11
+    }
+  ]
+}

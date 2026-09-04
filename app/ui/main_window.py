@@ -249,6 +249,54 @@ class MainWindow(QMainWindow):
                     pass
         _threading.Thread(target=_bg_preload, daemon=True, name="page_preload").start()
 
+        # Check for incomplete gaming sessions from a previous crash/exit
+        self._check_incomplete_sessions()
+
+    def _check_incomplete_sessions(self):
+        """Recover gaming sessions interrupted by abnormal shutdown.
+        
+        Delegates to GamingLifecycleManager.recover_incomplete_sessions()
+        which handles:
+        - Early states: mark FAILED, no restoration needed
+        - Applied changes: restore each reversible change individually
+        - Partial failures: continue restoring remaining changes
+        - Idempotent: skip already-recovered sessions
+        - Corrupted files: skip with warning
+        - Missing rollback data: mark IRREVERSIBLE
+        """
+        try:
+            from app.gaming.gaming_lifecycle import gaming_lifecycle
+
+            results = gaming_lifecycle.recover_incomplete_sessions()
+
+            for r in results:
+                status = r.get("recovery_status", "?")
+                sid = r.get("session_id", "?")
+                restored = r.get("changes_restored", 0)
+                failed = r.get("changes_failed", 0)
+
+                if status == "RECOVERED":
+                    logger.info(
+                        f"Session recovery OK: {sid} — "
+                        f"restored {restored} change(s)"
+                    )
+                elif status == "PARTIAL_RECOVERY":
+                    logger.warning(
+                        f"Partial recovery: {sid} — "
+                        f"restored {restored}, failed {failed}"
+                    )
+                elif status == "RECOVERY_FAILED":
+                    logger.error(
+                        f"Recovery failed: {sid} — "
+                        f"all {failed} restore(s) failed"
+                    )
+                elif status == "NO_RESTORE_NEEDED":
+                    logger.info(
+                        f"Session cleanup: {sid} — no restore needed"
+                    )
+        except Exception as e:
+            logger.debug(f"Session recovery check: {e}")
+
     # ── Window flags ──────────────────────────────────────────
 
     def _apply_flags(self):
