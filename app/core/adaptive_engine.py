@@ -894,6 +894,9 @@ def generate_recommendations(
                 expires_at=time.time() + 300,  # 5 minute validity
             )
             recommendations.append(rec)
+            # Record that this condition type generated a recommendation
+            # (engages the same-condition cooldown)
+            cooldown_manager.record_recommendation(ct)
 
     return recommendations
 
@@ -1148,6 +1151,10 @@ class AdaptiveEngine:
             if self._active_recommendation:
                 self._active_recommendation.action = RecommendationAction.DISMISS
                 self._active_recommendation = None
+            # Clean up session-scoped resources
+            self._window.clear()
+            self._condition_detector.clear_all()
+            self._cooldown_manager.clear()
 
         records = list(self._records)
         self._save_history(records)
