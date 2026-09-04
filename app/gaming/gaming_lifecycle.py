@@ -429,6 +429,7 @@ class GamingLifecycleManager:
         self._monitoring_active = False
         self._callbacks: List[Callable] = []
         self._pending_approval: Optional[List[LifecycleRecommendation]] = None
+        self._cached_gpus: list = []  # Cached GPU handles for lightweight per-tick updates
 
     @property
     def state(self) -> LifecycleState:
@@ -572,14 +573,17 @@ class GamingLifecycleManager:
         except Exception:
             pass
 
-        # GPU
+        # GPU (also cache handles for lightweight per-tick updates)
         try:
             from app.system.gpu import gpu_monitor
-            gpu = gpu_monitor.detect()
-            if gpu and gpu.utilization is not None:
-                baseline.gpu_percent = float(gpu.utilization)
-            if hasattr(gpu, "temperature") and gpu.temperature is not None:
-                baseline.gpu_temp = float(gpu.temperature)
+            gpus = gpu_monitor.detect()
+            if gpus:
+                self._cached_gpus = gpus  # Cache for adaptive telemetry tick
+                gpu = gpus[0]
+                if gpu.utilization_gpu is not None:
+                    baseline.gpu_percent = float(gpu.utilization_gpu)
+                if gpu.temperature_celsius is not None:
+                    baseline.gpu_temp = float(gpu.temperature_celsius)
         except Exception:
             pass
 
@@ -989,7 +993,12 @@ class GamingLifecycleManager:
             time.sleep(1.0)
 
     def _ingest_telemetry_tick(self):
-        """Collect lightweight system telemetry and feed to adaptive engine."""
+        """Collect lightweight system telemetry and feed to adaptive engine.
+
+        Collects CPU, RAM, target CPU (psutil), GPU util/temp (cached NVML),
+        and FPS/frame-time if PresentMon is available.
+        All queries are lightweight: psutil ~5ms, cached NVML ~0.1ms, PM check ~1ms.
+        """
         try:
             import psutil
             from app.core.adaptive_engine import adaptive_engine, TelemetryPoint
@@ -1014,6 +1023,28 @@ class GamingLifecycleManager:
                     point.target_cpu = proc.cpu_percent(interval=0)
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass
+
+            # GPU utilization and temperature via cached NVML handle (~0.1ms)
+            if self._cached_gpus:
+                try:
+                    from app.system.gpu import gpu_monitor
+                    gpu = gpu_monitor.update_nvidia(self._cached_gpus[0])
+                    point.gpu_percent = gpu.utilization_gpu
+                    point.gpu_temp = gpu.temperature_celsius
+                except Exception:
+                    pass
+
+            # FPS and frame time via PresentMon if available (~1ms)
+            try:
+                from app.performance.presentmon_provider import PresentMonProvider
+                pm = PresentMonProvider()
+                if pm.is_running():
+                    sample = pm.get_latest_sample()
+                    if sample:
+                        point.fps = getattr(sample, 'present_fps', None)
+                        point.frame_time_ms = getattr(sample, 'average_frame_time_ms', None)
+            except Exception:
+                pass
 
             adaptive_engine.ingest(point)
         except Exception as e:
@@ -1113,6 +1144,9 @@ class GamingLifecycleManager:
         self._worker_running = False
         if self._worker_thread and self._worker_thread.is_alive():
             self._worker_thread.join(timeout=5.0)
+
+        # Release cached GPU handles
+        self._cached_gpus = []
 
         # Stop adaptive engine
         try:
