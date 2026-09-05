@@ -50,6 +50,7 @@ class OptimizationCategory(Enum):
     MEMORY = "MEMORY"
     POWER = "POWER"
     GAMING = "GAMING"
+    STARTUP = "STARTUP"
     CLEANUP = "CLEANUP"
     SYSTEM = "SYSTEM"
 
@@ -122,7 +123,9 @@ class OptimizationResult:
 
 
 # Mapping from optimization ID to command center metadata
+# Categories match the actual optimization implementations
 _OPTIMIZATION_REGISTRY: Dict[str, dict] = {
+    # POWER
     "power_plan": {
         "name": "Power Plan",
         "description": "Switch Windows power plan for optimal performance",
@@ -131,6 +134,25 @@ _OPTIMIZATION_REGISTRY: Dict[str, dict] = {
         "reversible": True,
         "requires_admin": True,
     },
+    # PERFORMANCE
+    "background_load": {
+        "name": "Background Load",
+        "description": "Detect optional background applications consuming resources",
+        "category": OptimizationCategory.PERFORMANCE,
+        "risk": OptimizationRisk.LOW,
+        "reversible": True,
+        "requires_admin": False,
+    },
+    # MEMORY
+    "memory_analysis": {
+        "name": "Memory Analysis",
+        "description": "Analyze memory pressure and identify heavy processes",
+        "category": OptimizationCategory.MEMORY,
+        "risk": OptimizationRisk.SAFE,
+        "reversible": False,
+        "requires_admin": False,
+    },
+    # GAMING
     "game_mode": {
         "name": "Game Mode",
         "description": "Enable Windows Game Mode for gaming optimization",
@@ -147,27 +169,46 @@ _OPTIMIZATION_REGISTRY: Dict[str, dict] = {
         "reversible": True,
         "requires_admin": False,
     },
-    "background_load": {
-        "name": "Background Load",
-        "description": "Reduce unnecessary background CPU/memory consumption",
-        "category": OptimizationCategory.PERFORMANCE,
+    "game_bar": {
+        "name": "Game Bar Overlay",
+        "description": "Disable Xbox Game Bar overlay to reduce background usage",
+        "category": OptimizationCategory.GAMING,
         "risk": OptimizationRisk.LOW,
         "reversible": True,
         "requires_admin": False,
     },
-    "memory_analysis": {
-        "name": "Memory Analysis",
-        "description": "Analyze and identify memory-heavy processes",
-        "category": OptimizationCategory.MEMORY,
+    "background_recording": {
+        "name": "Background Recording",
+        "description": "Disable background recording to reduce CPU/disk overhead",
+        "category": OptimizationCategory.GAMING,
+        "risk": OptimizationRisk.LOW,
+        "reversible": True,
+        "requires_admin": False,
+    },
+    # STARTUP
+    "startup_analysis": {
+        "name": "Startup Analysis",
+        "description": "Analyze startup entries and recommend safe optimizations",
+        "category": OptimizationCategory.STARTUP,
         "risk": OptimizationRisk.SAFE,
         "reversible": False,
         "requires_admin": False,
     },
+    # CLEANUP
+    "cleanup_files": {
+        "name": "File Cleanup",
+        "description": "Clean temporary files and caches to free disk space",
+        "category": OptimizationCategory.CLEANUP,
+        "risk": OptimizationRisk.LOW,
+        "reversible": True,
+        "requires_admin": False,
+    },
+    # SYSTEM
     "visual_effects": {
         "name": "Visual Effects",
         "description": "Reduce Windows visual effects for better performance",
         "category": OptimizationCategory.SYSTEM,
-        "risk": OptimizationRisk.SAFE,
+        "risk": OptimizationRisk.LOW,
         "reversible": True,
         "requires_admin": False,
     },
@@ -206,6 +247,7 @@ def get_category_label(cat: OptimizationCategory) -> str:
         OptimizationCategory.MEMORY: "MEMORY",
         OptimizationCategory.POWER: "POWER",
         OptimizationCategory.GAMING: "GAMING",
+        OptimizationCategory.STARTUP: "STARTUP",
         OptimizationCategory.CLEANUP: "CLEANUP",
         OptimizationCategory.SYSTEM: "SYSTEM",
     }
@@ -219,6 +261,7 @@ def get_category_icon(cat: OptimizationCategory) -> str:
         OptimizationCategory.MEMORY: "\U0001f9e0",    # 🧠
         OptimizationCategory.POWER: "\U0001f50b",     # 🔋
         OptimizationCategory.GAMING: "\U0001f3ae",    # 🎮
+        OptimizationCategory.STARTUP: "🚀",   # 🚀
         OptimizationCategory.CLEANUP: "\U0001f9f9",   # 🧹
         OptimizationCategory.SYSTEM: "\u2699\ufe0f",  # ⚙️
     }

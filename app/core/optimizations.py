@@ -397,12 +397,27 @@ class MemoryAnalysisOptimization(Optimization):
 
 def get_all_optimizations() -> list:
     """Get all available optimization instances."""
+    from app.core.windows_optimizations import (
+        GameBarAdapter, BackgroundRecordingAdapter, VisualEffectsAdapter,
+        StartupOptimization, CleanupOptimization,
+    )
     return [
+        # Performance
         PowerPlanOptimization(),
+        BackgroundProcessOptimization(),
+        # Memory
+        MemoryAnalysisOptimization(),
+        # Gaming
         GameModeOptimization(),
         EmulatorPriorityOptimization(),
-        MemoryAnalysisOptimization(),
-        BackgroundProcessOptimization(),
+        GameBarAdapter(),
+        BackgroundRecordingAdapter(),
+        # Startup
+        StartupOptimization(),
+        # Cleanup
+        CleanupOptimization(),
+        # System
+        VisualEffectsAdapter(),
     ]
 
 

@@ -53,7 +53,7 @@ class TestOptimizationCategories:
             assert icon, f"Category {cat} has no icon"
 
     def test_expected_categories_exist(self):
-        expected = {"PERFORMANCE", "MEMORY", "POWER", "GAMING", "CLEANUP", "SYSTEM"}
+        expected = {"PERFORMANCE", "MEMORY", "POWER", "GAMING", "STARTUP", "CLEANUP", "SYSTEM"}
         actual = {cat.value for cat in OptimizationCategory}
         assert expected == actual
 
