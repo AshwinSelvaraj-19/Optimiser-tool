@@ -220,6 +220,10 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self.setStyleSheet(global_stylesheet())
 
+        # Initialize shader AFTER global stylesheet so the per-widget
+        # transparent-background overrides take effect.
+        self._init_shader()
+
         # Restore geometry with off-screen recovery
         self._restore_geometry()
 
@@ -265,7 +269,21 @@ class MainWindow(QMainWindow):
     # ── Shader Background ──────────────────────────────────────
 
     def _init_shader(self):
-        """Initialize the real-time shader background widget."""
+        """Initialize the real-time shader background widget.
+
+        Called AFTER ``setStyleSheet(global_stylesheet())`` so that the
+        per-widget transparent overrides below are not stomped.
+        Safe to call multiple times (e.g. on mode switch).
+        """
+        # Clean up previous shader if any
+        if self._shader_widget is not None:
+            try:
+                self._shader_widget.hide()
+                self._shader_widget._timer.stop()
+            except Exception:
+                pass
+            self._shader_widget = None
+
         try:
             from app.ui.shader_widget import ShaderWidget
             self._shader_widget = ShaderWidget(
@@ -277,6 +295,8 @@ class MainWindow(QMainWindow):
             # Trigger initial resize
             if self.centralWidget():
                 self._shader_widget.setGeometry(self.centralWidget().rect())
+            # Apply transparent backgrounds so the shader is visible
+            self._apply_shader_background()
         except Exception as e:
             logger.debug(f"Shader init failed (non-critical): {e}")
             self._shader_widget = None
@@ -287,6 +307,37 @@ class MainWindow(QMainWindow):
         self._settings.setValue("shader_enabled", enabled)
         if self._shader_widget:
             self._shader_widget.set_enabled(enabled)
+        self._apply_shader_background()
+
+    def _apply_shader_background(self):
+        """Make container backgrounds transparent so the shader shows through.
+
+        When the shader is enabled, the QMainWindow, centralWidget and
+        page-stack backgrounds must be transparent — otherwise they paint
+        an opaque layer that hides the lowered ShaderWidget.
+        Individual *cards* inside pages keep their opaque backgrounds so
+        text remains readable.
+        """
+        if self._shader_enabled and self._shader_widget is not None:
+            # Override the opaque QMainWindow background set by global stylesheet
+            self.setStyleSheet("QMainWindow { background-color: transparent; }")
+            # Override the opaque centralWidget background
+            if self.centralWidget():
+                self.centralWidget().setStyleSheet(
+                    "QWidget#centralWidget { background-color: transparent; }"
+                )
+            # Override the opaque page-stack background
+            if self._page_stack is not None:
+                self._page_stack.setStyleSheet(
+                    "QStackedWidget { background-color: transparent; border: none; }"
+                )
+        else:
+            # Restore normal opaque backgrounds via global stylesheet
+            self.setStyleSheet(global_stylesheet())
+            if self._page_stack is not None:
+                self._page_stack.setStyleSheet(
+                    f"QStackedWidget {{ background-color: {BG_PRIMARY}; border: none; }}"
+                )
 
     def set_shader_quality(self, quality: str):
         """Change shader quality level."""
@@ -297,7 +348,7 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self._shader_widget and self._shader_widget.isVisible():
+        if self._shader_widget and self._shader_enabled:
             self._shader_widget.setGeometry(self.centralWidget().rect())
 
     def _check_incomplete_sessions(self):
@@ -386,8 +437,9 @@ class MainWindow(QMainWindow):
         else:
             self._setup_normal_ui()
 
-        # Initialize shader background
-        self._init_shader()
+        # Shader initialization is intentionally deferred to the caller
+        # (after setStyleSheet) so that transparent-background overrides
+        # are not stomped by the global stylesheet.
 
     def _setup_panel_ui(self):
         """Panel mode: title bar + tab bar + page stack (no sidebar)."""
@@ -662,6 +714,10 @@ class MainWindow(QMainWindow):
             else:
                 self.resize(NORMAL_W, NORMAL_H)
 
+        # Drop shader reference before _setup_ui replaces centralWidget
+        # (old shader is destroyed along with the old central widget by Qt)
+        self._shader_widget = None
+
         # Rebuild UI
         self._nav_buttons = []
         self._tab_buttons = []
@@ -671,6 +727,9 @@ class MainWindow(QMainWindow):
 
         self._setup_ui()
         self.setStyleSheet(global_stylesheet())
+
+        # Reinitialize shader after global stylesheet
+        self._init_shader()
 
         # Restore page
         self._ensure_page(current_page)
@@ -853,6 +912,17 @@ class MainWindow(QMainWindow):
         except Exception as e:
             from app.utils.logger import get_logger
             get_logger("ui.main_window").debug(f"Telemetry stop error: {e}")
+
+        # Cleanup shader
+        if self._shader_widget is not None:
+            try:
+                self._shader_widget.hide()
+                self._shader_widget._timer.stop()
+                self._shader_widget._cleanup_gl()
+                self._shader_widget.deleteLater()
+            except Exception:
+                pass
+            self._shader_widget = None
 
         # Cleanup GPU
         try:
