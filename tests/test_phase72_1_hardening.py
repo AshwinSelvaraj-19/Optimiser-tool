@@ -256,4 +256,5 @@ class TestSafetyBoundaries:
         for opt in opts:
             assert opt.category in (
                 "SYSTEM", "GAMING", "EMULATOR", "STARTUP", "CLEANUP",
+                "POWER", "PERFORMANCE", "MEMORY",
             )

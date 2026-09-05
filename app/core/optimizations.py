@@ -22,7 +22,7 @@ class PowerPlanOptimization(Optimization):
     id = "power_plan"
     name = "Power Plan"
     description = "Switch to High Performance power plan for maximum CPU/GPU throughput"
-    category = "SYSTEM"
+    category = "POWER"
     risk_level = "LOW"
 
     def check(self) -> OptimizationResult:
@@ -95,7 +95,7 @@ class GameModeOptimization(Optimization):
     id = "game_mode"
     name = "Game Mode"
     description = "Enable Windows Game Mode for optimized gaming resource allocation"
-    category = "SYSTEM"
+    category = "GAMING"
     risk_level = "LOW"
 
     def check(self) -> OptimizationResult:
@@ -291,7 +291,7 @@ class BackgroundProcessOptimization(Optimization):
     id = "background_load"
     name = "Background Load"
     description = "Detect optional background applications consuming resources"
-    category = "SYSTEM"
+    category = "PERFORMANCE"
     risk_level = "LOW"
 
     def __init__(self):
@@ -346,7 +346,7 @@ class MemoryAnalysisOptimization(Optimization):
     id = "memory_analysis"
     name = "Memory Analysis"
     description = "Analyze memory pressure and provide safe recommendations for gaming"
-    category = "SYSTEM"
+    category = "MEMORY"
     risk_level = "NONE"
 
     def check(self) -> OptimizationResult:

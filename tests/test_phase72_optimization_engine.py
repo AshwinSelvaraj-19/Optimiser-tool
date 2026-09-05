@@ -87,7 +87,7 @@ class TestKnownOptimizations:
     def test_power_plan_exists(self):
         opt = get_optimization_by_id("power_plan")
         assert opt is not None
-        assert opt.category == "SYSTEM"
+        assert opt.category == "POWER"
 
     def test_game_mode_exists(self):
         opt = get_optimization_by_id("game_mode")
