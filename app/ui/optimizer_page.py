@@ -141,8 +141,18 @@ class OptimizerPage(QWidget):
         self._last_result: OptimizerWorkerResult | None = None
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._on_refresh_timer)
-        self._refresh_timer.start(3000)  # 3s between refresh requests
+        # Timer starts in showEvent to avoid work when hidden
         self._setup_ui()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._refresh_timer.isActive():
+            self._refresh_timer.start(3000)
+            self._on_refresh_timer()  # immediate refresh
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._refresh_timer.stop()
 
     def _setup_ui(self):
         # Wrap entire page in scroll area for compact panel

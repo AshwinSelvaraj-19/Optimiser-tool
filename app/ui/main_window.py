@@ -255,7 +255,12 @@ class MainWindow(QMainWindow):
         _threading.Thread(target=_bg_preload, daemon=True, name="page_preload").start()
 
         # Check for incomplete gaming sessions from a previous crash/exit
-        self._check_incomplete_sessions()
+        # Run on a background thread to avoid blocking the GUI (~2s I/O)
+        _threading.Thread(
+            target=self._check_incomplete_sessions,
+            daemon=True,
+            name="session_recovery",
+        ).start()
 
     # ── Shader Background ──────────────────────────────────────
 

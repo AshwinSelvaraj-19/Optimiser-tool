@@ -145,11 +145,23 @@ class MonitorPage(QWidget):
         # Telemetry: 2s for fast cached reads
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_telemetry)
-        self._timer.start(2000)
         # Expensive diagnostics: 15s background worker
         self._diag_timer = QTimer(self)
         self._diag_timer.timeout.connect(self._start_worker)
-        self._diag_timer.start(15000)
+        # Timers start in showEvent to avoid work when hidden
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._timer.isActive():
+            self._timer.start(2000)
+            self._update_telemetry()  # immediate refresh
+        if not self._diag_timer.isActive():
+            self._diag_timer.start(15000)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._timer.stop()
+        self._diag_timer.stop()
 
     def _setup_ui(self):
         from PySide6.QtWidgets import QScrollArea as _SA

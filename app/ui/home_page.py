@@ -190,7 +190,19 @@ class HomePage(QWidget):
         self._setup_ui()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_timer)
-        self._timer.start(2000)  # 2s between refresh requests
+        # Timer starts in showEvent to avoid work when hidden
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._timer.isActive():
+            self._timer.start(2000)
+            self._start_worker()  # refresh on first show
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if self._timer.isActive():
+            self._timer.stop()
+        # Let running worker finish naturally; stop timer prevents new workers
 
     def set_gaming_mode(self, enabled: bool):
         """Toggle compact gaming mode: hide non-essential labels."""
