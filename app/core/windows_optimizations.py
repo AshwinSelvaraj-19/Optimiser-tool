@@ -254,6 +254,9 @@ class CleanupOptimization(Optimization):
 
     Detects reclaimable space and recommends cleanup.
     Does NOT automatically clean — requires user approval.
+    NOTE: Cleanup is destructive (files are deleted). "Reversible" in the
+    optimization center means the user can re-run the scan, not that
+    deleted files are restored.
     """
 
     id = "cleanup_files"

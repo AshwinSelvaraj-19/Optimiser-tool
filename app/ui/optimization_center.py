@@ -200,7 +200,7 @@ _OPTIMIZATION_REGISTRY: Dict[str, dict] = {
         "description": "Clean temporary files and caches to free disk space",
         "category": OptimizationCategory.CLEANUP,
         "risk": OptimizationRisk.LOW,
-        "reversible": True,
+        "reversible": False,  # Deleted files cannot be restored
         "requires_admin": False,
     },
     # SYSTEM

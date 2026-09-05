@@ -517,7 +517,13 @@ class Optimizer:
         return result
 
     def get_current_status(self) -> dict:
-        """Get current optimization status for UI with live target detection."""
+        """Get current optimization status for UI.
+        
+        Returns metadata and registered optimization list WITHOUT calling
+        .check() on each — that is expensive and belongs in the worker thread.
+        The worker's _collect_engine_summary() handles the actual check results
+        via optimization_engine.get_ui_summary().
+        """
         status = {
             "optimizations": [],
             "admin": False,
@@ -533,30 +539,15 @@ class Optimizer:
         except Exception:
             pass
 
-        # Live target detection
-        target_name, target_pid = self._detect_target()
-        status["target_name"] = target_name
-        status["target_pid"] = target_pid
-
+        # Return optimization registry metadata only (no system queries)
         for opt in get_all_optimizations():
-            try:
-                result = opt.check()
-                status["optimizations"].append({
-                    "id": opt.id,
-                    "name": opt.name,
-                    "description": opt.description,
-                    "category": opt.category,
-                    "risk": opt.risk_level,
-                    "status": result.status.value,
-                    "current_value": result.current_value,
-                    "recommended_value": result.recommended_value,
-                    "message": result.message,
-                })
-            except Exception as e:
-                status["optimizations"].append({
-                    "id": opt.id, "name": opt.name,
-                    "status": "ERROR", "message": str(e),
-                })
+            status["optimizations"].append({
+                "id": opt.id,
+                "name": opt.name,
+                "description": opt.description,
+                "category": opt.category,
+                "risk": opt.risk_level,
+            })
 
         return status
 

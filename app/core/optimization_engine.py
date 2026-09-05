@@ -1355,7 +1355,12 @@ class OptimizationEngine:
     # ── UI Integration ────────────────────────────────────────
 
     def get_ui_summary(self) -> Dict:
-        """Get a structured summary for the UI."""
+        """Get a structured summary for the UI.
+        
+        Uses cached data only — does NOT perform live target detection
+        or expensive system queries. The worker thread is responsible for
+        fresh data collection via _collect_engine_summary().
+        """
         summary = {
             "status": "IDLE",
             "profile": "gaming",
@@ -1371,11 +1376,13 @@ class OptimizationEngine:
             "verdict_reason": "",
         }
 
-        status = self.get_status()
-        summary["status"] = status.current_phase
-        summary["is_admin"] = status.is_admin
-        summary["target_name"] = status.target_name
-        summary["target_pid"] = status.target_pid
+        # Use cached status — no live target detection
+        summary["status"] = self._current_run.phase.value if self._current_run else "IDLE"
+        try:
+            from app.utils.admin import is_admin
+            summary["is_admin"] = is_admin()
+        except Exception:
+            pass
 
         if self._last_run:
             run = self._last_run
