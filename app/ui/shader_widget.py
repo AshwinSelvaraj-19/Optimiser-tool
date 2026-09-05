@@ -18,12 +18,18 @@ Can be disabled entirely via settings.
 
 import time
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QSurfaceFormat
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
-from PySide6.QtOpenGL import QOpenGLShaderProgram, QOpenGLShader
+from PySide6.QtOpenGL import (
+    QOpenGLShaderProgram,
+    QOpenGLShader,
+    QOpenGLBuffer,
+)
 
 GL_COLOR_BUFFER_BIT = 0x00004000
+GL_FLOAT = 0x1406
+GL_TRIANGLES = 0x0004
 
 from app.utils.logger import get_logger
 
@@ -150,10 +156,16 @@ class ShaderWidget(QOpenGLWidget):
         self._enabled = enabled
         self._quality = quality.upper() if quality.upper() in self._QUALITY_FPS else "LOW"
         self._program = None
-        self._vbo_data = None
+        self._vbo = None
+        self._vbo_tex = None
         self._start_time = time.time()
         self._visible = True
-        self._gl = None  # Will be set in initializeGL
+        self._gl = None
+
+        # Cached uniform locations (set in initializeGL)
+        self._loc_time = -1
+        self._loc_resolution = -1
+        self._loc_intensity = -1
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -198,9 +210,16 @@ class ShaderWidget(QOpenGLWidget):
 
     def initializeGL(self):
         try:
-            from PySide6.QtGui import QOpenGLFunctions as _GLFuncs
-            self._gl = _GLFuncs()
-            self._gl.initializeGL()
+            # Obtain an initialized QOpenGLFunctions object from the
+            # current context.  The old code called a non-existent
+            # QOpenGLFunctions.initializeGL() which always failed.
+            ctx = self.context()
+            if ctx is None or not ctx.isValid():
+                logger.warning("No valid OpenGL context — shader disabled")
+                self._program = None
+                return
+            self._gl = ctx.functions()
+
             self._program = QOpenGLShaderProgram(self)
 
             vs = QOpenGLShader(QOpenGLShader.Vertex)
@@ -217,24 +236,55 @@ class ShaderWidget(QOpenGLWidget):
                 self._program = None
                 return
 
-            # Full-screen quad: position (x,y) + texcoord (u,v)
+            # Cache uniform locations — int-based overloads are guaranteed
+            # in every PySide6 version; name-based overloads may not accept
+            # scalar floats on all builds.
+            self._loc_time = self._program.uniformLocation(b"uTime")
+            self._loc_resolution = self._program.uniformLocation(b"uResolution")
+            self._loc_intensity = self._program.uniformLocation(b"uIntensity")
+
+            # ── Vertex data via QOpenGLBuffer (PySide6-safe) ──
+            # Position attribute (location 0): vec2
             # fmt: off
-            vertices = [
-                -1.0, -1.0,  0.0, 0.0,
-                 1.0, -1.0,  1.0, 0.0,
-                 1.0,  1.0,  1.0, 1.0,
-                -1.0, -1.0,  0.0, 0.0,
-                 1.0,  1.0,  1.0, 1.0,
-                -1.0,  1.0,  0.0, 1.0,
+            positions = [
+                -1.0, -1.0,
+                 1.0, -1.0,
+                 1.0,  1.0,
+                -1.0, -1.0,
+                 1.0,  1.0,
+                -1.0,  1.0,
+            ]
+            # TexCoord attribute (location 1): vec2
+            texcoords = [
+                0.0, 0.0,
+                1.0, 0.0,
+                1.0, 1.0,
+                0.0, 0.0,
+                1.0, 1.0,
+                0.0, 1.0,
             ]
             # fmt: on
 
             import ctypes
-            arr_type = (ctypes.c_float * len(vertices))
-            c_arr = arr_type(*vertices)
 
-            self._vao = None  # We'll use direct draw
-            self._vbo_data = c_arr
+            # Position VBO
+            pos_bytes = (ctypes.c_float * len(positions))(*positions)
+            self._vbo = QOpenGLBuffer(QOpenGLBuffer.Type.VertexBuffer)
+            self._vbo.create()
+            self._vbo.bind()
+            self._vbo.allocate(pos_bytes, len(positions) * 4)
+            self._vbo.release()
+            self._vbo_count = len(positions) // 2  # 6 vertices
+
+            # TexCoord VBO
+            tex_bytes = (ctypes.c_float * len(texcoords))(*texcoords)
+            self._vbo_tex = QOpenGLBuffer(QOpenGLBuffer.Type.VertexBuffer)
+            self._vbo_tex.create()
+            self._vbo_tex.bind()
+            self._vbo_tex.allocate(tex_bytes, len(texcoords) * 4)
+            self._vbo_tex.release()
+
+            logger.debug("Shader initialized successfully")
 
         except Exception as e:
             logger.warning(f"Shader init failed (falling back): {e}")
@@ -252,30 +302,37 @@ class ShaderWidget(QOpenGLWidget):
 
         self._program.bind()
 
+        # Uniforms — use cached int locations
         elapsed = time.time() - self._start_time
-        self._program.setUniformValue("uTime", float(elapsed))
+        self._program.setUniformValue(self._loc_time, float(elapsed))
         self._program.setUniformValue(
-            "uResolution",
+            self._loc_resolution,
             float(self.width()),
             float(self.height()),
         )
         intensity = {"LOW": 0.5, "MEDIUM": 0.75, "HIGH": 1.0}.get(self._quality, 0.5)
-        self._program.setUniformValue("uIntensity", float(intensity))
+        self._program.setUniformValue(self._loc_intensity, float(intensity))
 
-        # Draw quad
+        # Bind position VBO (attribute 0)
+        self._vbo.bind()
         self._program.enableAttributeArray(0)
+        self._program.setAttributeBuffer(
+            0, GL_FLOAT, 0, 2, 2 * 4  # attribute, type, offset, tupleSize, stride
+        )
+
+        # Bind texcoord VBO (attribute 1)
+        self._vbo_tex.bind()
         self._program.enableAttributeArray(1)
+        self._program.setAttributeBuffer(
+            1, GL_FLOAT, 0, 2, 2 * 4
+        )
 
-        import ctypes
-        data_ptr = ctypes.cast(self._vbo_data, ctypes.POINTER(ctypes.c_float))
-
-        self._program.setAttributeArray(0, data_ptr, 2, 4 * 4)
-        self._program.setAttributeArray(1, data_ptr + 2, 2, 4 * 4)
-
-        gl.glDrawArrays(gl.GL_TRIANGLES, 0, 6)
+        gl.glDrawArrays(GL_TRIANGLES, 0, self._vbo_count)
 
         self._program.disableAttributeArray(0)
         self._program.disableAttributeArray(1)
+        self._vbo.release()
+        self._vbo_tex.release()
         self._program.release()
 
     def resizeGL(self, w, h):
@@ -299,6 +356,27 @@ class ShaderWidget(QOpenGLWidget):
         # Stop updating when hidden — save GPU
         if self._timer.isActive():
             self._timer.stop()
+
+    def _cleanup_gl(self):
+        """Release OpenGL resources.  Safe to call multiple times."""
+        try:
+            if self._vbo is not None:
+                self._vbo.destroy()
+                self._vbo = None
+        except Exception:
+            pass
+        try:
+            if self._vbo_tex is not None:
+                self._vbo_tex.destroy()
+                self._vbo_tex = None
+        except Exception:
+            pass
+        try:
+            if self._program is not None:
+                self._program.removeAllShaders()
+                self._program = None
+        except Exception:
+            pass
 
     def __del__(self):
         try:
