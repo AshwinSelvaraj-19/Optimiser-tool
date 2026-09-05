@@ -7,14 +7,15 @@ Only keeps settings that actually affect the application.
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView
+    QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QScrollArea,
+    QSizePolicy
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSettings
 
 from app.ui.theme import (
     BG_PANEL, BORDER_LIGHT, BORDER_MEDIUM,
     ACCENT_PRIMARY, ACCENT_SUBTLE,
-    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY,
+    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY, TEXT_INVERSE,
     STATUS_OK, STATUS_WARN, STATUS_ERROR, STATUS_MUTED,
     FONT_FAMILY, FONT_MONO,
     FONT_SIZE_SM, FONT_SIZE_XS, FONT_SIZE_MD,
@@ -145,6 +146,67 @@ class SettingsPage(QWidget):
 
         layout.addWidget(pm_frame)
 
+        # ── Visual Effects (Shader) ───────────────────────────
+        self._settings_qsettings = QSettings("HeavenSociety", "Panel")
+        shader_frame = QFrame()
+        shader_frame.setStyleSheet(f"""
+            QFrame {{
+                {card_style()}
+            }}
+        """)
+        shader_layout = QVBoxLayout(shader_frame)
+        shader_layout.setContentsMargins(10, 8, 10, 8)
+        shader_layout.setSpacing(4)
+
+        shader_title = QLabel("VISUAL EFFECTS")
+        shader_title.setStyleSheet(card_title_style())
+        shader_layout.addWidget(shader_title)
+
+        # Shader ON/OFF
+        shader_row = QHBoxLayout()
+        shader_label = QLabel("Real-Time Shader")
+        shader_label.setStyleSheet(f"""
+            color: {TEXT_SECONDARY};
+            font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS};
+            border: none;
+        """)
+        shader_row.addWidget(shader_label)
+        shader_row.addStretch()
+
+        self.shader_toggle = QPushButton("ON" if self._settings_qsettings.value("shader_enabled", True, type=bool) else "OFF")
+        self.shader_toggle.setFixedSize(50, 24)
+        self.shader_toggle.setCursor(Qt.PointingHandCursor)
+        self.shader_toggle.clicked.connect(self._toggle_shader)
+        self._update_shader_btn_style()
+        shader_row.addWidget(self.shader_toggle)
+        shader_layout.addLayout(shader_row)
+
+        # Quality selector
+        quality_row = QHBoxLayout()
+        quality_label = QLabel("Quality")
+        quality_label.setStyleSheet(f"""
+            color: {TEXT_SECONDARY};
+            font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS};
+            border: none;
+        """)
+        quality_row.addWidget(quality_label)
+        quality_row.addStretch()
+
+        self.quality_combo = QComboBox()
+        self.quality_combo.setFixedWidth(90)
+        self.quality_combo.addItems(["LOW", "MEDIUM", "HIGH"])
+        saved_q = self._settings_qsettings.value("shader_quality", "LOW", type=str)
+        idx = self.quality_combo.findText(saved_q)
+        if idx >= 0:
+            self.quality_combo.setCurrentIndex(idx)
+        self.quality_combo.currentTextChanged.connect(self._on_quality_changed)
+        quality_row.addWidget(self.quality_combo)
+        shader_layout.addLayout(quality_row)
+
+        layout.addWidget(shader_frame)
+
         # ── About ────────────────────────────────────────────
         about_frame = QFrame()
         about_frame.setStyleSheet(f"""
@@ -242,3 +304,56 @@ class SettingsPage(QWidget):
         result = rollback_engine.rollback_latest()
         logger.info(f"Restore: {result.message}")
         self.refresh()
+
+    def _toggle_shader(self):
+        """Toggle shader ON/OFF."""
+        current = self._settings_qsettings.value("shader_enabled", True, type=bool)
+        new_val = not current
+        self._settings_qsettings.setValue("shader_enabled", new_val)
+        self.shader_toggle.setText("ON" if new_val else "OFF")
+        self._update_shader_btn_style()
+        # Notify main window
+        try:
+            from app.ui.main_window import MainWindow
+            mw = self.window()
+            if isinstance(mw, MainWindow):
+                mw.set_shader_enabled(new_val)
+        except Exception:
+            pass
+
+    def _on_quality_changed(self, quality: str):
+        """Handle shader quality change."""
+        self._settings_qsettings.setValue("shader_quality", quality)
+        try:
+            from app.ui.main_window import MainWindow
+            mw = self.window()
+            if isinstance(mw, MainWindow):
+                mw.set_shader_quality(quality)
+        except Exception:
+            pass
+
+    def _update_shader_btn_style(self):
+        """Update shader toggle button style based on state."""
+        is_on = self.shader_toggle.text() == "ON"
+        if is_on:
+            self.shader_toggle.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {STATUS_OK};
+                    color: {TEXT_INVERSE};
+                    border: none;
+                    border-radius: 12px;
+                    font-size: 10px;
+                    font-weight: {WEIGHT_BOLD};
+                }}
+            """)
+        else:
+            self.shader_toggle.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {BORDER_LIGHT};
+                    color: {TEXT_TERTIARY};
+                    border: none;
+                    border-radius: 12px;
+                    font-size: 10px;
+                    font-weight: {WEIGHT_BOLD};
+                }}
+            """)

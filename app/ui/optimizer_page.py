@@ -289,6 +289,93 @@ class OptimizerPage(QWidget):
         """)
         layout.addWidget(self.log_text)
 
+        # ── OPTIMIZATION COMMAND CENTER ────────────────────────
+        from app.ui.optimization_center import (
+            get_optimization_items_by_category, get_category_label,
+            get_category_icon, OptimizationStatus, get_status_color,
+            get_status_label,
+        )
+
+        cmd_frame = QFrame()
+        cmd_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
+        cmd_layout = QVBoxLayout(cmd_frame)
+        cmd_layout.setContentsMargins(10, 6, 10, 6)
+        cmd_layout.setSpacing(3)
+
+        cmd_header = QHBoxLayout()
+        cmd_title = QLabel("OPTIMIZATION CENTER")
+        cmd_title.setStyleSheet(f"""
+            color: {ACCENT_PRIMARY};
+            font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_SM};
+            font-weight: {WEIGHT_BOLD};
+            letter-spacing: 2px;
+            border: none;
+        """)
+        cmd_header.addWidget(cmd_title)
+        cmd_header.addStretch()
+        self._cmd_status_label = QLabel("")
+        self._cmd_status_label.setStyleSheet(f"""
+            color: {TEXT_TERTIARY};
+            font-family: {FONT_FAMILY};
+            font-size: {FONT_SIZE_XS};
+            border: none;
+        """)
+        cmd_header.addWidget(self._cmd_status_label)
+        cmd_layout.addLayout(cmd_header)
+
+        # Category rows
+        self._category_widgets = {}
+        cat_items = get_optimization_items_by_category()
+        for cat, items in cat_items.items():
+            cat_row = QHBoxLayout()
+            cat_row.setSpacing(6)
+
+            icon_label = QLabel(get_category_icon(cat))
+            icon_label.setStyleSheet(f"font-size: 12px; border: none;")
+            icon_label.setFixedWidth(18)
+            cat_row.addWidget(icon_label)
+
+            name_label = QLabel(get_category_label(cat))
+            name_label.setStyleSheet(f"""
+                color: {TEXT_SECONDARY};
+                font-family: {FONT_FAMILY};
+                font-size: {FONT_SIZE_XS};
+                font-weight: {WEIGHT_SEMIBOLD};
+                border: none;
+            """)
+            cat_row.addWidget(name_label)
+
+            cat_row.addStretch()
+
+            count_label = QLabel(f"{len(items)} items")
+            count_label.setStyleSheet(f"""
+                color: {TEXT_TERTIARY};
+                font-family: {FONT_MONO};
+                font-size: {FONT_SIZE_XS};
+                border: none;
+            """)
+            cat_row.addWidget(count_label)
+
+            status_label = QLabel(get_status_label(OptimizationStatus.UNKNOWN))
+            status_label.setStyleSheet(f"""
+                color: {get_status_color(OptimizationStatus.UNKNOWN)};
+                font-family: {FONT_MONO};
+                font-size: {FONT_SIZE_XS};
+                font-weight: {WEIGHT_BOLD};
+                border: none;
+            """)
+            cat_row.addWidget(status_label)
+
+            self._category_widgets[cat] = {
+                "count": count_label,
+                "status": status_label,
+                "items": items,
+            }
+            cmd_layout.addLayout(cat_row)
+
+        layout.addWidget(cmd_frame)
+
         # Windows Gaming section
         self.win_frame = QFrame()
         self.win_frame.setStyleSheet(f"QFrame {{ {card_style()} }}")
@@ -1186,6 +1273,7 @@ class OptimizerPage(QWidget):
             self._apply_opt_session(result)
             self._apply_gaming_session(result)
             self._apply_engine_status(result)
+            self._apply_optimization_center(result)
         except Exception as e:
             logger.debug(f"Apply result: {e}")
         # Clean up thread reference
@@ -2446,6 +2534,65 @@ class OptimizerPage(QWidget):
 
         except Exception as e:
             logger.debug(f"Engine status apply: {e}")
+
+    def _apply_optimization_center(self, result: OptimizerWorkerResult):
+        """Update optimization command center categories with status."""
+        try:
+            from app.ui.optimization_center import (
+                OptimizationStatus, get_status_color, get_status_label,
+            )
+            if not hasattr(self, '_category_widgets'):
+                return
+
+            summary = result.engine_summary
+            if summary is None:
+                return
+
+            actions = summary.get("actions", [])
+            # Build map of optimization_id -> verdict
+            action_map = {}
+            for a in actions:
+                oid = a.get("optimization_id", a.get("id", ""))
+                verdict = a.get("verdict", "UNKNOWN")
+                action_map[oid] = verdict
+
+            for cat, widgets in self._category_widgets.items():
+                items = widgets["items"]
+                # Determine category status from items
+                any_recommended = False
+                any_applied = False
+                for item in items:
+                    v = action_map.get(item.opt_id, "")
+                    if v == "APPLIED":
+                        any_applied = True
+                    elif v in ("OPTIMIZABLE", "RECOMMENDED"):
+                        any_recommended = True
+
+                if any_applied:
+                    status = OptimizationStatus.APPLIED
+                elif any_recommended:
+                    status = OptimizationStatus.RECOMMENDED
+                else:
+                    status = OptimizationStatus.CURRENT
+
+                widgets["status"].setText(get_status_label(status))
+                widgets["status"].setStyleSheet(f"""
+                    color: {get_status_color(status)};
+                    font-family: {FONT_MONO};
+                    font-size: {FONT_SIZE_XS};
+                    font-weight: {WEIGHT_BOLD};
+                    border: none;
+                """)
+
+            # Update header summary
+            total_items = sum(len(w["items"]) for w in self._category_widgets.values())
+            total_applied = sum(1 for a in actions if a.get("verdict") == "APPLIED")
+            self._cmd_status_label.setText(
+                f"{total_applied}/{total_items} optimized"
+            )
+
+        except Exception as e:
+            logger.debug(f"Optimization center apply: {e}")
 
     def _apply_gaming_session(self, result: OptimizerWorkerResult):
         """Apply gaming optimization session status from worker result."""

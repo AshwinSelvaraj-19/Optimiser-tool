@@ -191,6 +191,11 @@ class MainWindow(QMainWindow):
         self._always_on_top = self._settings.value("always_on_top", False, type=bool)
         self._panel_mode = self._settings.value("panel_mode", True, type=bool)
         self._gaming_mode = self._settings.value("gaming_mode", False, type=bool)
+        self._shader_enabled = self._settings.value("shader_enabled", True, type=bool)
+        self._shader_quality = self._settings.value("shader_quality", "LOW", type=str)
+
+        # Shader widget (initialized in _setup_ui)
+        self._shader_widget = None
 
         # Mutable state
         self._pages = {}
@@ -251,6 +256,44 @@ class MainWindow(QMainWindow):
 
         # Check for incomplete gaming sessions from a previous crash/exit
         self._check_incomplete_sessions()
+
+    # ── Shader Background ──────────────────────────────────────
+
+    def _init_shader(self):
+        """Initialize the real-time shader background widget."""
+        try:
+            from app.ui.shader_widget import ShaderWidget
+            self._shader_widget = ShaderWidget(
+                self.centralWidget(),
+                enabled=self._shader_enabled,
+                quality=self._shader_quality,
+            )
+            self._shader_widget.lower()  # Send behind all other widgets
+            # Trigger initial resize
+            if self.centralWidget():
+                self._shader_widget.setGeometry(self.centralWidget().rect())
+        except Exception as e:
+            logger.debug(f"Shader init failed (non-critical): {e}")
+            self._shader_widget = None
+
+    def set_shader_enabled(self, enabled: bool):
+        """Toggle the shader background."""
+        self._shader_enabled = enabled
+        self._settings.setValue("shader_enabled", enabled)
+        if self._shader_widget:
+            self._shader_widget.set_enabled(enabled)
+
+    def set_shader_quality(self, quality: str):
+        """Change shader quality level."""
+        self._shader_quality = quality
+        self._settings.setValue("shader_quality", quality)
+        if self._shader_widget:
+            self._shader_widget.set_quality(quality)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._shader_widget and self._shader_widget.isVisible():
+            self._shader_widget.setGeometry(self.centralWidget().rect())
 
     def _check_incomplete_sessions(self):
         """Recover gaming sessions interrupted by abnormal shutdown.
@@ -337,6 +380,9 @@ class MainWindow(QMainWindow):
             self._setup_panel_ui()
         else:
             self._setup_normal_ui()
+
+        # Initialize shader background
+        self._init_shader()
 
     def _setup_panel_ui(self):
         """Panel mode: title bar + tab bar + page stack (no sidebar)."""
